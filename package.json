@@ -1,0 +1,20 @@
+{
+  "name": "sutriva-travel-app",
+  "version": "1.0.0",
+  "description": "Sutriva - Plan. Compare. Travel. Responsive Web & Mobile App in Flutter",
+  "main": "index.html",
+  "scripts": {
+    "dev": "npx -y serve . -p 8080",
+    "start": "npx -y serve . -p 8080"
+  },
+  "keywords": [
+    "flutter",
+    "flutter-web",
+    "travel",
+    "responsive",
+    "mobile"
+  ],
+  "author": "Sutriva Team",
+  "license": "ISC",
+  "dependencies": {}
+}
