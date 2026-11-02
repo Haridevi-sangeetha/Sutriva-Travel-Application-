@@ -12120,6 +12120,367 @@ body.dark-mode .destinations-section p {
   }
 }
 
+/* ================= DYNAMIC TRANSPORT SEARCH RESULTS STYLES ================= */
+.transport-results-section {
+  max-width: 1320px;
+  margin: 20px auto 35px auto;
+  padding: 0 20px;
+}
+
+.transport-results-header {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 18px;
+  flex-wrap: wrap;
+}
+
+.t-results-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11.5px;
+  font-weight: 800;
+  padding: 4px 10px;
+  border-radius: 20px;
+  background: #eff6ff;
+  color: #1877f2;
+  margin-bottom: 6px;
+}
+
+.t-results-title {
+  font-size: 24px;
+  font-weight: 800;
+  color: #0f172a;
+  margin: 0 0 4px 0;
+  letter-spacing: -0.3px;
+}
+
+.t-results-subtitle {
+  font-size: 13px;
+  color: #64748b;
+  margin: 0;
+}
+
+.t-results-sort {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.t-results-sort .sort-label {
+  font-size: 12px;
+  font-weight: 700;
+  color: #64748b;
+}
+
+.t-sort-select {
+  padding: 7px 12px;
+  border: 1.5px solid #cbd5e1;
+  border-radius: 10px;
+  background: #ffffff;
+  font-size: 12.5px;
+  font-weight: 700;
+  color: #334155;
+  outline: none;
+  cursor: pointer;
+}
+
+.t-active-filter-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 20px;
+  background: #f8fafc;
+  padding: 10px 16px;
+  border-radius: 14px;
+  border: 1px solid #e2e8f0;
+  flex-wrap: wrap;
+}
+
+.t-filter-chips {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.t-active-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  background: #ffffff;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  font-size: 12px;
+  font-weight: 700;
+  color: #1e293b;
+}
+
+.t-active-pill i {
+  color: #1877f2;
+}
+
+.t-results-counter {
+  font-size: 12.5px;
+  font-weight: 700;
+  color: #64748b;
+}
+
+.t-results-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(380px, 1fr));
+  gap: 18px;
+}
+
+@media (max-width: 640px) {
+  .t-results-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.t-card {
+  background: #ffffff;
+  border: 1.5px solid #e2e8f0;
+  border-radius: 18px;
+  padding: 20px;
+  box-shadow: 0 4px 16px rgba(15, 23, 42, 0.04);
+  transition: all 0.22s cubic-bezier(0.16, 1, 0.3, 1);
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  position: relative;
+  overflow: hidden;
+}
+
+.t-card:hover {
+  transform: translateY(-3px);
+  border-color: #93c5fd;
+  box-shadow: 0 12px 28px rgba(24, 119, 242, 0.12);
+}
+
+.t-card-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 14px;
+}
+
+.t-card-operator {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.t-operator-logo {
+  width: 38px;
+  height: 38px;
+  border-radius: 10px;
+  background: #f1f5f9;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 18px;
+  color: #1877f2;
+}
+
+.t-operator-name {
+  font-size: 15px;
+  font-weight: 800;
+  color: #0f172a;
+  line-height: 1.2;
+}
+
+.t-operator-sub {
+  font-size: 11.5px;
+  color: #64748b;
+  font-weight: 600;
+}
+
+.t-card-badge {
+  font-size: 11px;
+  font-weight: 800;
+  padding: 4px 9px;
+  border-radius: 8px;
+  background: #ecfdf5;
+  color: #059669;
+}
+
+.t-card-route-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 0;
+  border-top: 1px dashed #e2e8f0;
+  border-bottom: 1px dashed #e2e8f0;
+  margin-bottom: 14px;
+}
+
+.t-time-point {
+  text-align: left;
+}
+
+.t-time-point.t-time-right {
+  text-align: right;
+}
+
+.t-time-val {
+  font-size: 20px;
+  font-weight: 800;
+  color: #0f172a;
+  line-height: 1;
+}
+
+.t-time-city {
+  font-size: 12px;
+  color: #64748b;
+  font-weight: 600;
+  margin-top: 3px;
+}
+
+.t-route-mid {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  flex: 1;
+  padding: 0 12px;
+}
+
+.t-duration-pill {
+  font-size: 11px;
+  font-weight: 700;
+  color: #475569;
+  background: #f1f5f9;
+  padding: 2px 8px;
+  border-radius: 12px;
+}
+
+.t-route-line {
+  width: 100%;
+  height: 2px;
+  background: #cbd5e1;
+  position: relative;
+}
+
+.t-route-line::after {
+  content: '';
+  position: absolute;
+  right: 0;
+  top: -3px;
+  width: 8px;
+  height: 8px;
+  border-top: 2px solid #cbd5e1;
+  border-right: 2px solid #cbd5e1;
+  transform: rotate(45deg);
+}
+
+.t-card-features {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 16px;
+}
+
+.t-feat-tag {
+  font-size: 11px;
+  font-weight: 600;
+  color: #475569;
+  background: #f8fafc;
+  border: 1px solid #f1f5f9;
+  padding: 3px 8px;
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.t-card-bottom {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding-top: 6px;
+}
+
+.t-card-price-col {
+  display: flex;
+  flex-direction: column;
+}
+
+.t-price-from {
+  font-size: 11px;
+  font-weight: 600;
+  color: #64748b;
+}
+
+.t-price-amount {
+  font-size: 22px;
+  font-weight: 800;
+  color: #10b981;
+  line-height: 1.1;
+}
+
+.t-book-btn {
+  padding: 9px 18px;
+  border-radius: 10px;
+  background: #1877f2;
+  color: #ffffff;
+  border: none;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  transition: all 0.2s;
+  box-shadow: 0 2px 8px rgba(24, 119, 242, 0.25);
+}
+
+.t-book-btn:hover {
+  background: #1464cc;
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(24, 119, 242, 0.35);
+}
+
+/* Dark Mode Overrides for Results Section */
+body.dark-mode .transport-results-section .t-results-title {
+  color: #ffffff !important;
+}
+
+body.dark-mode .transport-results-section .t-active-filter-bar {
+  background: #1e293b !important;
+  border-color: #334155 !important;
+}
+
+body.dark-mode .transport-results-section .t-active-pill {
+  background: #0f172a !important;
+  border-color: #334155 !important;
+  color: #f1f5f9 !important;
+}
+
+body.dark-mode .t-card {
+  background: #1e293b !important;
+  border-color: #334155 !important;
+}
+
+body.dark-mode .t-operator-name,
+body.dark-mode .t-time-val {
+  color: #f8fafc !important;
+}
+
+body.dark-mode .t-card-route-row {
+  border-color: #334155 !important;
+}
+
+body.dark-mode .t-feat-tag {
+  background: #0f172a !important;
+  border-color: #334155 !important;
+  color: #94a3b8 !important;
+}
+
 /* ================= GOVERNMENT PUBLIC TRANSPORT BUS PORTAL STYLES ================= */
 .govt-bus-portal-section {
   padding: 24px 20px 40px;

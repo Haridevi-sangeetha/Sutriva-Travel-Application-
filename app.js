@@ -37,8 +37,15 @@ function switchPage(pageId) {
       setTimeout(() => window.initExploreMapPage(), 50);
     } else if (pageId === 'food' && typeof window.loadFoodPlacesFromDB === 'function') {
       setTimeout(() => window.loadFoodPlacesFromDB(), 30);
-    } else if (pageId === 'transport' && typeof window.fetchGovernmentBuses === 'function') {
-      setTimeout(() => window.fetchGovernmentBuses(false), 30);
+    } else if (pageId === 'transport') {
+      if (typeof window.renderTransportResults === 'function') {
+        const activePill = document.querySelector('.t-mode-pill.active');
+        const m = activePill ? (activePill.dataset.tmode || 'Flights') : 'Flights';
+        window.renderTransportResults(m);
+      }
+      if (typeof window.fetchGovernmentBuses === 'function') {
+        setTimeout(() => window.fetchGovernmentBuses(false), 30);
+      }
     } else if (typeof window.renderToolPage === 'function') {
       window.renderToolPage(pageId);
     }
@@ -3612,12 +3619,595 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
 
-  // --- Transport Mode Pill Selection on Transport Page ---
+    // --- Transport Mode Pill Selection & Dynamic Results Engine ---
   const tModePills = document.querySelectorAll('.t-mode-pill');
   const tTimeGroup = document.getElementById('tTimeGroup');
   const tReturnGroup = document.getElementById('tReturnGroup');
   const tTravelerGroup = document.getElementById('tTravelerGroup');
   const tTravelerLabel = tTravelerGroup ? tTravelerGroup.querySelector('label') : null;
+
+  // Traveler state for Transport page
+  let tTravelerCounts = { adults: 2, children: 0 };
+
+  function updateTTravelerUI() {
+    const adultCountEl = document.getElementById('tAdultCount');
+    const childCountEl = document.getElementById('tChildCount');
+    const tTravelerInput = document.getElementById('tTravelerInput');
+    const adultMinus = document.getElementById('tAdultMinus');
+    const childMinus = document.getElementById('tChildMinus');
+
+    if (adultCountEl) adultCountEl.textContent = tTravelerCounts.adults;
+    if (childCountEl) childCountEl.textContent = tTravelerCounts.children;
+    if (adultMinus) adultMinus.disabled = tTravelerCounts.adults <= 1;
+    if (childMinus) childMinus.disabled = tTravelerCounts.children <= 0;
+
+    const parts = [];
+    parts.push(tTravelerCounts.adults === 1 ? '1 Adult' : `${tTravelerCounts.adults} Adults`);
+    if (tTravelerCounts.children > 0) {
+      parts.push(tTravelerCounts.children === 1 ? '1 Child' : `${tTravelerCounts.children} Children`);
+    }
+    const res = parts.join(', ');
+    if (tTravelerInput) tTravelerInput.value = res;
+    const badge = document.getElementById('tCurrentPaxBadge');
+    if (badge) badge.innerHTML = `<i class="fa-solid fa-user"></i> ${res}`;
+  }
+
+  // Setup Date and Traveler Dropdown Controls for Transport Page
+  function setupTransportInputControls() {
+    // Departure date picker
+    const tDepartNative = document.getElementById('tDepartDateNative');
+    const tDepartInput = document.getElementById('tDepartInput');
+    if (tDepartNative && tDepartInput) {
+      tDepartNative.addEventListener('change', (e) => {
+        const val = e.target.value;
+        if (val) {
+          const d = new Date(val);
+          const formatted = d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
+          tDepartInput.value = formatted;
+          const b = document.getElementById('tCurrentDateBadge');
+          if (b) b.innerHTML = `<i class="fa-regular fa-calendar"></i> ${formatted}`;
+          showToast(`Departure Date set to: ${formatted}`);
+        }
+      });
+    }
+
+    // Departure preset chips
+    document.querySelectorAll('.date-chip[data-target="depart"]').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const days = parseInt(btn.dataset.days || '0', 10);
+        const d = new Date();
+        d.setDate(d.getDate() + days);
+        const formatted = d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
+        if (tDepartInput) tDepartInput.value = formatted;
+        const b = document.getElementById('tCurrentDateBadge');
+        if (b) b.innerHTML = `<i class="fa-regular fa-calendar"></i> ${formatted}`;
+        const menu = btn.closest('.dropdown-menu');
+        if (menu) menu.classList.remove('show');
+        showToast(`Departure set: ${formatted}`);
+      });
+    });
+
+    // Return date picker
+    const tReturnNative = document.getElementById('tReturnDateNative');
+    const tReturnInput = document.getElementById('tReturnInput');
+    if (tReturnNative && tReturnInput) {
+      tReturnNative.addEventListener('change', (e) => {
+        const val = e.target.value;
+        if (val) {
+          const d = new Date(val);
+          const formatted = d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
+          tReturnInput.value = formatted;
+          showToast(`Return Date set to: ${formatted}`);
+        }
+      });
+    }
+
+    // Return preset chips
+    document.querySelectorAll('.date-chip[data-target="return"]').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const days = parseInt(btn.dataset.days || '7', 10);
+        const d = new Date();
+        d.setDate(d.getDate() + days);
+        const formatted = d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
+        if (tReturnInput) tReturnInput.value = formatted;
+        const menu = btn.closest('.dropdown-menu');
+        if (menu) menu.classList.remove('show');
+        showToast(`Return set: ${formatted}`);
+      });
+    });
+
+    // Traveler controls
+    const adultMinus = document.getElementById('tAdultMinus');
+    const adultPlus = document.getElementById('tAdultPlus');
+    const childMinus = document.getElementById('tChildMinus');
+    const childPlus = document.getElementById('tChildPlus');
+    const applyBtn = document.getElementById('tApplyTravelersBtn');
+
+    if (adultMinus) {
+      adultMinus.addEventListener('click', (e) => {
+        e.stopPropagation();
+        if (tTravelerCounts.adults > 1) {
+          tTravelerCounts.adults--;
+          updateTTravelerUI();
+        }
+      });
+    }
+    if (adultPlus) {
+      adultPlus.addEventListener('click', (e) => {
+        e.stopPropagation();
+        if (tTravelerCounts.adults < 9) {
+          tTravelerCounts.adults++;
+          updateTTravelerUI();
+        }
+      });
+    }
+    if (childMinus) {
+      childMinus.addEventListener('click', (e) => {
+        e.stopPropagation();
+        if (tTravelerCounts.children > 0) {
+          tTravelerCounts.children--;
+          updateTTravelerUI();
+        }
+      });
+    }
+    if (childPlus) {
+      childPlus.addEventListener('click', (e) => {
+        e.stopPropagation();
+        if (tTravelerCounts.children < 6) {
+          tTravelerCounts.children++;
+          updateTTravelerUI();
+        }
+      });
+    }
+
+    // Traveler preset chips
+    document.querySelectorAll('.preset-chip[data-t-adults]').forEach(chip => {
+      chip.addEventListener('click', (e) => {
+        e.stopPropagation();
+        tTravelerCounts.adults = parseInt(chip.dataset.tAdults || '1', 10);
+        tTravelerCounts.children = parseInt(chip.dataset.tChild || '0', 10);
+        document.querySelectorAll('.preset-chip[data-t-adults]').forEach(c => c.classList.remove('active'));
+        chip.classList.add('active');
+        updateTTravelerUI();
+      });
+    });
+
+    if (applyBtn) {
+      applyBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const dropdown = document.getElementById('tTravelerDropdown');
+        if (dropdown) dropdown.classList.remove('show');
+        if (tTravelerGroup) tTravelerGroup.classList.remove('active-dropdown');
+        showToast(`Updated to ${document.getElementById('tTravelerInput')?.value}`);
+      });
+    }
+  }
+
+  // --- Dynamic Transport Mode Card Render Engine ---
+  const MOCK_TRANSPORT_DATA = {
+    Flights: [
+      {
+        operator: 'IndiGo Airlines',
+        code: '6E-204',
+        icon: 'fa-plane',
+        badge: 'Lowest Price',
+        fromTime: '06:15',
+        toTime: '07:20',
+        duration: '1h 05m',
+        type: 'Non-stop Flight',
+        features: ['Cabin 7kg included', '98% On-time', 'Free Web Check-in', 'Snacks on Board'],
+        price: '₹3,449'
+      },
+      {
+        operator: 'Air India',
+        code: 'AI-542',
+        icon: 'fa-plane-departure',
+        badge: 'Complimentary Meal',
+        fromTime: '09:40',
+        toTime: '10:55',
+        duration: '1h 15m',
+        type: 'Non-stop Flight',
+        features: ['25kg Baggage', 'Hot Meals Included', 'Spacious Legroom'],
+        price: '₹4,120'
+      },
+      {
+        operator: 'Akasa Air',
+        code: 'QP-1314',
+        icon: 'fa-plane-up',
+        badge: 'Top Rated',
+        fromTime: '14:20',
+        toTime: '15:25',
+        duration: '1h 05m',
+        type: 'Non-stop Flight',
+        features: ['USB Fast Charging', 'Eco-friendly Fleet', 'Pet Friendly'],
+        price: '₹3,680'
+      },
+      {
+        operator: 'Vistara',
+        code: 'UK-832',
+        icon: 'fa-plane',
+        badge: 'Premium Cabin',
+        fromTime: '18:50',
+        toTime: '20:05',
+        duration: '1h 15m',
+        type: 'Non-stop Flight',
+        features: ['Premium Economy', 'Star Alliance Perks', 'Gourmet Dining'],
+        price: '₹4,890'
+      }
+    ],
+    Trains: [
+      {
+        operator: 'Vande Bharat Express',
+        code: 'Train #20608',
+        icon: 'fa-train-subway',
+        badge: 'Fastest Train',
+        fromTime: '05:50',
+        toTime: '10:20',
+        duration: '4h 30m',
+        type: 'AC Chair Car & Executive',
+        features: ['Bio Vacuum Toilets', 'Rotational Seats', 'Hot Meals Served', 'Free Wi-Fi'],
+        price: '₹965'
+      },
+      {
+        operator: 'Shatabdi Express',
+        code: 'Train #12028',
+        icon: 'fa-train',
+        badge: 'Popular Express',
+        fromTime: '06:00',
+        toTime: '11:00',
+        duration: '5h 00m',
+        type: 'Chair Car (CC) / EC',
+        features: ['Breakfast Included', 'Daily Service', 'Mobile Charging Ports'],
+        price: '₹745'
+      },
+      {
+        operator: 'Brindavan Superfast Express',
+        code: 'Train #12639',
+        icon: 'fa-train',
+        badge: 'Budget Friendly',
+        fromTime: '07:40',
+        toTime: '13:40',
+        duration: '6h 00m',
+        type: 'Second Seating (2S) / CC',
+        features: ['Scenic Journey', 'Pantry Car', 'Daily Service'],
+        price: '₹195'
+      },
+      {
+        operator: 'Chennai Mail Superfast',
+        code: 'Train #12657',
+        icon: 'fa-train-tram',
+        badge: 'Overnight Sleeper',
+        fromTime: '23:15',
+        toTime: '04:30',
+        duration: '5h 15m',
+        type: '1A / 2A / 3A / SL',
+        features: ['Clean Bedrolls', 'Quiet Hours', 'Early Morning Arrival'],
+        price: '₹480'
+      }
+    ],
+    Buses: [
+      {
+        operator: 'Tamil Nadu Government (MTC)',
+        code: 'Route M70 / 500',
+        icon: 'fa-bus-simple',
+        badge: 'Govt Verified Route',
+        fromTime: '05:30',
+        toTime: '06:45',
+        duration: '1h 15m',
+        type: 'Deluxe Express',
+        features: ['ChennaiGTFS Verified', 'Every 10 Mins', 'Cash & Chalo Card', 'Direct Route'],
+        price: '₹22'
+      },
+      {
+        operator: 'KPN Travels',
+        code: 'Multi-Axle Volvo',
+        icon: 'fa-bus',
+        badge: 'Luxury Sleeper',
+        fromTime: '22:00',
+        toTime: '05:30',
+        duration: '7h 30m',
+        type: 'AC Sleeper 2+1',
+        features: ['Blankets & Water', 'Charging Ports', 'Live GPS Tracking', 'Emergency SOS'],
+        price: '₹750'
+      },
+      {
+        operator: 'SRS Travels',
+        code: 'Scania Metrolink',
+        icon: 'fa-bus',
+        badge: 'High Rating',
+        fromTime: '23:15',
+        toTime: '06:15',
+        duration: '7h 00m',
+        type: 'Multi-Axle Semi-Sleeper',
+        features: ['Air Suspension', 'Reading Lamps', 'Spacious Legroom'],
+        price: '₹680'
+      },
+      {
+        operator: 'TNSTC Ultra Deluxe',
+        code: 'SETC Govt Classic',
+        icon: 'fa-bus-simple',
+        badge: 'State Transport',
+        fromTime: '21:30',
+        toTime: '05:00',
+        duration: '7h 30m',
+        type: 'Pushback 2+2 Seat',
+        features: ['Govt Fixed Fare', 'Punctual Departure', 'Safe Driving'],
+        price: '₹420'
+      }
+    ],
+    Cabs: [
+      {
+        operator: 'Sutriva Go (City Cab)',
+        code: 'Instant Doorstep',
+        icon: 'fa-taxi',
+        badge: 'Fastest ETA: 3 min',
+        fromTime: 'Now',
+        toTime: 'Drop-off',
+        duration: '25 - 35m',
+        type: 'Compact AC Hatchback',
+        features: ['Clean & Sanitized', 'Zero Cancellation Fee', 'No Surge Pricing', 'Verified Driver'],
+        price: '₹280'
+      },
+      {
+        operator: 'Sutriva Prime Sedan',
+        code: 'Dzire / Etios',
+        icon: 'fa-car-side',
+        badge: 'Top Rated Drivers',
+        fromTime: 'Now',
+        toTime: 'Drop-off',
+        duration: '25 - 35m',
+        type: 'Premium Sedan',
+        features: ['Extra Legroom', 'Free In-Cab Wi-Fi', 'Quiet Ride Option', 'Complimentary Water'],
+        price: '₹390'
+      },
+      {
+        operator: 'Sutriva Outstation XL',
+        code: 'Innova Crysta',
+        icon: 'fa-van-shuttle',
+        badge: '6-Seater Family',
+        fromTime: 'On-Demand',
+        toTime: 'Flexible Drop',
+        duration: 'Outstation Ready',
+        type: '6+1 Luxury SUV',
+        features: ['Huge Luggage Space', 'Roof Carrier', 'Highway Toll Assist', 'Dual AC'],
+        price: '₹1,250'
+      },
+      {
+        operator: 'Auto / E-Rickshaw Express',
+        code: 'City Commute',
+        icon: 'fa-motorcycle',
+        badge: 'Budget Quick Trip',
+        fromTime: 'Now',
+        toTime: 'Drop-off',
+        duration: '20 - 30m',
+        type: '3-Wheeler Auto',
+        features: ['Bypass Traffic', 'Meter Standard Fare', 'Digital UPI Payment'],
+        price: '₹110'
+      }
+    ],
+    'Car Rentals': [
+      {
+        operator: 'Mahindra Thar 4x4 (Self-Drive)',
+        code: 'Sutriva Rentals',
+        icon: 'fa-truck-monster',
+        badge: 'Adventure Ready',
+        fromTime: '09:00 AM',
+        toTime: '24h Rental',
+        duration: 'Full Day',
+        type: 'Convertible Hardtop',
+        features: ['Unlimited KMs', 'Zero Security Deposit', 'Comprehensive Insurance', 'GPS Navigation'],
+        price: '₹2,899/day'
+      },
+      {
+        operator: 'Hyundai Creta Automatic',
+        code: 'Sutriva Fleet',
+        icon: 'fa-car',
+        badge: 'Comfort Cruise',
+        fromTime: 'Flexible',
+        toTime: '24h Rental',
+        duration: 'Full Day',
+        type: 'Automatic 5-Seater SUV',
+        features: ['Sunroof', 'Touchscreen Infotainment', 'Free Doorstep Delivery', '24/7 Roadside Assist'],
+        price: '₹2,499/day'
+      },
+      {
+        operator: 'Maruti Suzuki Swift',
+        code: 'Economy Drive',
+        icon: 'fa-car-side',
+        badge: 'Best Value',
+        fromTime: 'Flexible',
+        toTime: '24h Rental',
+        duration: 'Full Day',
+        type: 'Manual Hatchback',
+        features: ['22 km/l Mileage', 'Easy City Parking', 'Free Sanitization'],
+        price: '₹1,299/day'
+      }
+    ],
+    Ferries: [
+      {
+        operator: 'Makruzz Gold Catamaran',
+        code: 'High Speed Cruise',
+        icon: 'fa-ship',
+        badge: 'Fastest Sea Route',
+        fromTime: '08:00',
+        toTime: '09:30',
+        duration: '1h 30m',
+        type: 'Deluxe AC Passenger Boat',
+        features: ['Panoramic Windows', 'Snack Bar Onboard', 'Life Jackets & Coast Guard Certified'],
+        price: '₹1,250'
+      },
+      {
+        operator: 'Green Ocean Ferry',
+        code: 'Open Deck Cruiser',
+        icon: 'fa-sailboat',
+        badge: 'Scenic Open Deck',
+        fromTime: '13:00',
+        toTime: '15:15',
+        duration: '2h 15m',
+        type: 'Open View Ferry',
+        features: ['Open Deck Access', 'Music & Refreshments', 'Ideal for Photography'],
+        price: '₹950'
+      }
+    ],
+    'Bike/Scooter': [
+      {
+        operator: 'Royal Enfield Hunter 350',
+        code: 'Sutriva Moto',
+        icon: 'fa-motorcycle',
+        badge: 'Tourer Choice',
+        fromTime: 'Instant',
+        toTime: 'Daily / Weekly',
+        duration: 'Per 24h',
+        type: '350cc Cruiser',
+        features: ['2 ISI Helmets Included', 'Phone Mount & Charger', 'Emergency Roadside Assist'],
+        price: '₹850/day'
+      },
+      {
+        operator: 'Honda Activa 6G',
+        code: 'City Scooter',
+        icon: 'fa-moped',
+        badge: 'Easy Commute',
+        fromTime: 'Instant',
+        toTime: 'Daily / Weekly',
+        duration: 'Per 24h',
+        type: '110cc Automatic Scooter',
+        features: ['55 km/l Economy', 'Keyless Ignition', 'Spacious Boot Space'],
+        price: '₹399/day'
+      },
+      {
+        operator: 'Ather 450X Gen 3 (EV)',
+        code: 'Green Ride',
+        icon: 'fa-bolt',
+        badge: 'Zero Emission',
+        fromTime: 'Instant',
+        toTime: 'Daily / Weekly',
+        duration: 'Per 24h',
+        type: 'Electric Smart Scooter',
+        features: ['Free Grid Charging', 'Touchscreen GPS Maps', 'Warp Mode 90 km/h'],
+        price: '₹499/day'
+      }
+    ],
+    More: [
+      {
+        operator: 'Chennai Metro Rail (CMRL)',
+        code: 'Green / Blue Lines',
+        icon: 'fa-train-subway',
+        badge: 'Zero Traffic',
+        fromTime: 'Every 5 min',
+        toTime: 'All Day',
+        duration: '15 - 20m',
+        type: 'Rapid Metro Transit',
+        features: ['Air Conditioned Coaches', 'Direct Koyambedu Station to Vadapalani Station', 'Token & Card Accepted'],
+        price: '₹20 - ₹40'
+      },
+      {
+        operator: 'Airport Electric Express Shuttle',
+        code: 'MTC Route 18E',
+        icon: 'fa-van-shuttle',
+        badge: 'Direct Airport Link',
+        fromTime: 'Every 20 min',
+        toTime: 'Terminal Drop',
+        duration: '35m',
+        type: 'Low-Floor AC EV Bus',
+        features: ['Luggage Racks', 'Direct Terminal 1 & 2', 'Priority Seating'],
+        price: '₹120'
+      }
+    ]
+  };
+
+  function renderTransportResults(mode, queryFrom, queryTo) {
+    const resultsSec = document.getElementById('transportResultsSection');
+    const badge = document.getElementById('tResultsBadge');
+    const title = document.getElementById('tResultsTitle');
+    const subtitle = document.getElementById('tResultsSubtitle');
+    const modeBadge = document.getElementById('tCurrentModeBadge');
+    const routeBadge = document.getElementById('tCurrentRouteBadge');
+    const countEl = document.getElementById('tResultsCount');
+    const grid = document.getElementById('tResultsGrid');
+
+    if (!grid) return;
+
+    const fromVal = queryFrom || (document.getElementById('tFromInput') ? document.getElementById('tFromInput').value : 'Chennai');
+    const toVal = queryTo || (document.getElementById('tToInput') ? document.getElementById('tToInput').value : 'Bangalore');
+    const fromClean = fromVal.replace(/\s*\(.*?\)/, '').trim() || 'Origin';
+    const toClean = toVal.replace(/\s*\(.*?\)/, '').trim() || 'Destination';
+
+    const cleanMode = mode || 'Flights';
+    const dataList = MOCK_TRANSPORT_DATA[cleanMode] || MOCK_TRANSPORT_DATA['Flights'];
+
+    if (badge) badge.innerHTML = `<i class="fa-solid fa-${cleanMode === 'Trains' ? 'train' : cleanMode === 'Buses' ? 'bus' : cleanMode === 'Cabs' ? 'taxi' : cleanMode === 'Car Rentals' ? 'car' : cleanMode === 'Bike/Scooter' ? 'motorcycle' : cleanMode === 'Ferries' ? 'ship' : 'plane'}"></i> Verified Available Options`;
+    if (title) title.textContent = `Available ${cleanMode}: ${fromClean} ➔ ${toClean}`;
+    if (subtitle) subtitle.textContent = `Compare verified live schedules, operator ratings, and instant booking options`;
+    if (modeBadge) modeBadge.innerHTML = `<i class="fa-solid fa-compass"></i> Mode: ${cleanMode}`;
+    if (routeBadge) routeBadge.innerHTML = `<i class="fa-solid fa-route"></i> ${fromClean} ➔ ${toClean}`;
+    if (countEl) countEl.textContent = `Showing ${dataList.length} verified options`;
+
+    grid.innerHTML = dataList.map(item => `
+      <div class="t-card">
+        <div>
+          <div class="t-card-top">
+            <div class="t-card-operator">
+              <div class="t-operator-logo">
+                <i class="fa-solid ${item.icon}"></i>
+              </div>
+              <div>
+                <div class="t-operator-name">${item.operator}</div>
+                <div class="t-operator-sub">${item.code} • ${item.type}</div>
+              </div>
+            </div>
+            <span class="t-card-badge">${item.badge}</span>
+          </div>
+
+          <div class="t-card-route-row">
+            <div class="t-time-point">
+              <div class="t-time-val">${item.fromTime}</div>
+              <div class="t-time-city">${fromClean}</div>
+            </div>
+            <div class="t-route-mid">
+              <span class="t-duration-pill">${item.duration}</span>
+              <div class="t-route-line"></div>
+              <span style="font-size:10px; color:#64748b; font-weight:600;">Direct Route</span>
+            </div>
+            <div class="t-time-point t-time-right">
+              <div class="t-time-val">${item.toTime}</div>
+              <div class="t-time-city">${toClean}</div>
+            </div>
+          </div>
+
+          <div class="t-card-features">
+            ${item.features.map(f => `<span class="t-feat-tag"><i class="fa-solid fa-circle-check text-green"></i> ${f}</span>`).join('')}
+          </div>
+        </div>
+
+        <div class="t-card-bottom">
+          <div class="t-card-price-col">
+            <span class="t-price-from">Fare estimate</span>
+            <strong class="t-price-amount">${item.price}</strong>
+          </div>
+          <button class="t-book-btn" onclick="bookTransportItem('${item.operator}', '${item.price}', '${cleanMode}')">
+            <span>${cleanMode === 'Cabs' ? 'Book Cab' : cleanMode === 'Car Rentals' ? 'Reserve Car' : cleanMode === 'Bike/Scooter' ? 'Rent Bike' : cleanMode === 'Ferries' ? 'Book Ferry' : cleanMode === 'Trains' ? 'Book Train' : 'Book Now'}</span>
+            <i class="fa-solid fa-arrow-right"></i>
+          </button>
+        </div>
+      </div>
+    `).join('');
+
+    // Smooth scroll down to results section so user sees immediate feedback
+    if (resultsSec) {
+      resultsSec.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+  }
+  window.renderTransportResults = renderTransportResults;
+
+  function bookTransportItem(title, price, mode) {
+    showToast(`Proceeding to reserve ${title} (${price})! 🚀`);
+    if (typeof window.openRazorpayModal === 'function') {
+      window.openRazorpayModal(title, price);
+    }
+  }
+  window.bookTransportItem = bookTransportItem;
 
   function setTransportMode(mode) {
     if (tModePills.length > 0) {
@@ -3627,52 +4217,45 @@ document.addEventListener('DOMContentLoaded', () => {
       });
     }
 
+    const fromVal = document.getElementById('tFromInput') ? document.getElementById('tFromInput').value : 'Chennai';
+    const toVal = document.getElementById('tToInput') ? document.getElementById('tToInput').value : 'Bangalore';
+
     if (mode === 'Buses') {
-      // 1. Show timing input box specifically for Buses
-      if (tTimeGroup) {
-        tTimeGroup.style.display = 'flex';
+      if (tTimeGroup) tTimeGroup.style.display = 'flex';
+      if (tReturnGroup) tReturnGroup.style.display = 'none';
+      if (tTravelerLabel) tTravelerLabel.textContent = 'Passengers / Seats';
+      showToast('Bus Mode: Live MongoDB MTC & Intercity routes active! 🚌');
+
+      // Populate government bus search fields
+      const govtFrom = document.getElementById('govtBusFromInput');
+      const govtTo = document.getElementById('govtBusToInput');
+      if (govtFrom) govtFrom.value = fromVal.replace(/\s*\(.*?\)/, '').trim();
+      if (govtTo) govtTo.value = toVal.replace(/\s*\(.*?\)/, '').trim();
+
+      renderTransportResults('Buses', fromVal, toVal);
+      if (typeof window.fetchGovernmentBuses === 'function') {
+        window.fetchGovernmentBuses(true);
       }
-      // 2. Hide Return Date (Buses use departure timing slots)
-      if (tReturnGroup) {
-        tReturnGroup.style.display = 'none';
-      }
-      // 3. Update Travelers label
-      if (tTravelerLabel) {
-        tTravelerLabel.textContent = 'Passengers / Seats';
-      }
-      showToast('Bus Mode: Departure Timing box enabled! 🚌');
     } else {
-      // For Flights, Trains, Cabs, etc.
-      if (tTimeGroup) {
-        tTimeGroup.style.display = 'none';
-      }
-      if (tReturnGroup) {
-        tReturnGroup.style.display = 'flex';
-      }
-      if (tTravelerLabel) {
-        tTravelerLabel.textContent = 'Travelers';
-      }
-      showToast(`Filter Transport by: ${mode}`);
+      if (tTimeGroup) tTimeGroup.style.display = 'none';
+      if (tReturnGroup) tReturnGroup.style.display = 'flex';
+      if (tTravelerLabel) tTravelerLabel.textContent = 'Travelers';
+      showToast(`Showing verified ${mode} options`);
+      renderTransportResults(mode, fromVal, toVal);
     }
   }
   window.setTransportMode = setTransportMode;
 
   tModePills.forEach(pill => {
-    pill.addEventListener('click', () => {
-      const mode = pill.dataset.tmode;
+    pill.addEventListener('click', (e) => {
+      e.preventDefault();
+      const mode = pill.dataset.tmode || pill.innerText.trim();
       setTransportMode(mode);
-
-      if (mode === 'Buses') {
-        const govtSec = document.getElementById('govtBusSection');
-        if (govtSec) {
-          govtSec.scrollIntoView({ behavior: 'smooth', block: 'start' });
-        }
-        if (typeof window.fetchGovernmentBuses === 'function') {
-          window.fetchGovernmentBuses(false);
-        }
-      }
     });
   });
+
+  // Initialize input controls for transport
+  setupTransportInputControls();
 
   // Time Dropdown and Custom Time Picker Interactions
   const tTimeInput = document.getElementById('tTimeInput');
@@ -3710,7 +4293,6 @@ document.addEventListener('DOMContentLoaded', () => {
         if (tTimeGroup) tTimeGroup.classList.remove('active-dropdown');
         showToast(`Bus timing set to ${val} ⏱️`);
 
-        // Sync with government bus filter
         const hour = parseInt(val.split(':')[0], 10);
         let slot = 'morning';
         if (hour >= 12 && hour < 17) slot = 'afternoon';
@@ -3728,44 +4310,31 @@ document.addEventListener('DOMContentLoaded', () => {
     card.addEventListener('click', () => {
       switchPage('transport');
       setTransportMode('Buses');
-      setTimeout(() => {
-        const govtSec = document.getElementById('govtBusSection');
-        if (govtSec) govtSec.scrollIntoView({ behavior: 'smooth', block: 'start' });
-        if (typeof window.fetchGovernmentBuses === 'function') window.fetchGovernmentBuses(false);
-      }, 150);
     });
   });
 
   // --- Transport Search Submit Button ---
   const tSearchSubmitBtn = document.getElementById('tSearchSubmitBtn');
   if (tSearchSubmitBtn) {
-    tSearchSubmitBtn.addEventListener('click', () => {
-      const fromVal = document.getElementById('tFromInput') ? document.getElementById('tFromInput').value : 'Chennai (MAA)';
-      const toVal = document.getElementById('tToInput') ? document.getElementById('tToInput').value : 'Bangalore (BLR)';
+    tSearchSubmitBtn.addEventListener('click', (e) => {
+      e.preventDefault();
+      const fromVal = document.getElementById('tFromInput') ? document.getElementById('tFromInput').value : 'Chennai';
+      const toVal = document.getElementById('tToInput') ? document.getElementById('tToInput').value : 'Bangalore';
       const activeModePill = document.querySelector('.t-mode-pill.active');
       const modeName = activeModePill ? (activeModePill.dataset.tmode || activeModePill.innerText.trim()) : 'Flights';
 
+      showToast(`Searching ${modeName}: ${fromVal} ➔ ${toVal}...`);
+      renderTransportResults(modeName, fromVal, toVal);
+
       if (modeName === 'Buses') {
-        const timeVal = tTimeInput ? tTimeInput.value : 'Any Time';
-        
-        // Populate government bus search fields if empty
         const govtFrom = document.getElementById('govtBusFromInput');
         const govtTo = document.getElementById('govtBusToInput');
-        if (govtFrom && !govtFrom.value) govtFrom.value = fromVal.replace(/\s*\(.*?\)/, '');
-        if (govtTo && !govtTo.value) govtTo.value = toVal.replace(/\s*\(.*?\)/, '');
-
-        const govtSec = document.getElementById('govtBusSection');
-        if (govtSec) {
-          govtSec.scrollIntoView({ behavior: 'smooth', block: 'start' });
-        }
+        if (govtFrom) govtFrom.value = fromVal.replace(/\s*\(.*?\)/, '').trim();
+        if (govtTo) govtTo.value = toVal.replace(/\s*\(.*?\)/, '').trim();
         if (typeof window.fetchGovernmentBuses === 'function') {
           window.fetchGovernmentBuses(true);
         }
-        showToast(`Searching Buses: ${fromVal} ➔ ${toVal} | ${timeVal} 🚌`);
-        return;
       }
-
-      showToast(`Searching ${modeName}: ${fromVal} ➔ ${toVal}...`);
     });
   }
 

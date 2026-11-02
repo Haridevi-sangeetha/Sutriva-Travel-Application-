@@ -1474,6 +1474,19 @@
                       <input type="text" id="tDepartInput" value="12 Jul 2025" readonly>
                     </div>
                     <i class="fa-solid fa-chevron-down dropdown-icon"></i>
+                    <div class="dropdown-menu custom-date-picker-dropdown" id="tDepartPickerDropdown">
+                      <div class="date-fields-grid" style="grid-template-columns: 1fr;">
+                        <div class="date-field-box">
+                          <label><i class="fa-solid fa-calendar-days text-blue"></i> Choose Departure Date</label>
+                          <input type="date" id="tDepartDateNative" value="2025-07-12">
+                        </div>
+                      </div>
+                      <div class="date-preset-chips">
+                        <button type="button" class="date-chip" data-target="depart" data-days="0">Today</button>
+                        <button type="button" class="date-chip" data-target="depart" data-days="1">Tomorrow</button>
+                        <button type="button" class="date-chip" data-target="depart" data-days="7">Next Week</button>
+                      </div>
+                    </div>
                   </div>
 
                   <div class="input-group" id="tReturnGroup">
@@ -1483,6 +1496,19 @@
                       <input type="text" id="tReturnInput" value="19 Jul 2025" readonly>
                     </div>
                     <i class="fa-solid fa-chevron-down dropdown-icon"></i>
+                    <div class="dropdown-menu custom-date-picker-dropdown" id="tReturnPickerDropdown">
+                      <div class="date-fields-grid" style="grid-template-columns: 1fr;">
+                        <div class="date-field-box">
+                          <label><i class="fa-solid fa-calendar-days text-blue"></i> Choose Return Date</label>
+                          <input type="date" id="tReturnDateNative" value="2025-07-19">
+                        </div>
+                      </div>
+                      <div class="date-preset-chips">
+                        <button type="button" class="date-chip" data-target="return" data-days="3">+3 Days</button>
+                        <button type="button" class="date-chip" data-target="return" data-days="7">+1 Week</button>
+                        <button type="button" class="date-chip" data-target="return" data-days="14">+2 Weeks</button>
+                      </div>
+                    </div>
                   </div>
 
                   <!-- Bus Specific Timing Input Group (Dynamically displayed when Buses is selected) -->
@@ -1543,6 +1569,40 @@
                       <input type="text" id="tTravelerInput" value="2 Adults" readonly>
                     </div>
                     <i class="fa-solid fa-chevron-down dropdown-icon"></i>
+                    <div class="dropdown-menu traveler-counter-dropdown" id="tTravelerDropdown">
+                      <div class="preset-chips-row">
+                        <span class="preset-chip active" data-t-adults="1" data-t-child="0">Solo (1)</span>
+                        <span class="preset-chip" data-t-adults="2" data-t-child="0">Couple (2)</span>
+                        <span class="preset-chip" data-t-adults="2" data-t-child="2">Family (4)</span>
+                      </div>
+                      <div class="counter-rows-container">
+                        <div class="counter-item-row">
+                          <div class="counter-text-side">
+                            <strong>Adults</strong>
+                            <span>Ages 12+</span>
+                          </div>
+                          <div class="stepper-controls">
+                            <button type="button" class="step-btn" id="tAdultMinus"><i class="fa-solid fa-minus"></i></button>
+                            <span class="count-display" id="tAdultCount">2</span>
+                            <button type="button" class="step-btn" id="tAdultPlus"><i class="fa-solid fa-plus"></i></button>
+                          </div>
+                        </div>
+                        <div class="counter-item-row">
+                          <div class="counter-text-side">
+                            <strong>Children</strong>
+                            <span>Ages 2 - 11</span>
+                          </div>
+                          <div class="stepper-controls">
+                            <button type="button" class="step-btn" id="tChildMinus"><i class="fa-solid fa-minus"></i></button>
+                            <span class="count-display" id="tChildCount">0</span>
+                            <button type="button" class="step-btn" id="tChildPlus"><i class="fa-solid fa-plus"></i></button>
+                          </div>
+                        </div>
+                      </div>
+                      <div class="counter-apply-footer">
+                        <button type="button" class="apply-counter-btn" id="tApplyTravelersBtn">Done</button>
+                      </div>
+                    </div>
                   </div>
 
                   <button class="search-submit-btn t-search-btn" id="tSearchSubmitBtn">
@@ -1552,6 +1612,46 @@
 
                 </div>
 
+              </div>
+            </section>
+
+            <!-- ================= DYNAMIC TRANSPORT SEARCH RESULTS SECTION ================= -->
+            <section class="transport-results-section" id="transportResultsSection">
+              <div class="transport-results-header">
+                <div>
+                  <div class="t-results-badge" id="tResultsBadge">
+                    <i class="fa-solid fa-plane"></i> Live Availability
+                  </div>
+                  <h2 class="t-results-title" id="tResultsTitle">Available Flights: Chennai ➔ Bangalore</h2>
+                  <p class="t-results-subtitle" id="tResultsSubtitle">Real-time scheduled options, fares & instant booking</p>
+                </div>
+                <div class="t-results-sort">
+                  <span class="sort-label">Sort by:</span>
+                  <select id="tSortSelect" class="t-sort-select">
+                    <option value="recommended">Recommended</option>
+                    <option value="price_low">Cheapest First</option>
+                    <option value="duration_short">Fastest</option>
+                    <option value="departure_early">Earliest Departure</option>
+                  </select>
+                </div>
+              </div>
+
+              <!-- Active Mode Filter Tags & Quick Actions -->
+              <div class="t-active-filter-bar">
+                <div class="t-filter-chips" id="tFilterChips">
+                  <span class="t-active-pill" id="tCurrentModeBadge"><i class="fa-solid fa-plane"></i> Flights</span>
+                  <span class="t-active-pill" id="tCurrentRouteBadge"><i class="fa-solid fa-route"></i> Chennai ➔ Bangalore</span>
+                  <span class="t-active-pill" id="tCurrentDateBadge"><i class="fa-regular fa-calendar"></i> 12 Jul 2025</span>
+                  <span class="t-active-pill" id="tCurrentPaxBadge"><i class="fa-solid fa-user"></i> 2 Adults</span>
+                </div>
+                <div class="t-results-counter">
+                  <span id="tResultsCount">Showing 6 verified options</span>
+                </div>
+              </div>
+
+              <!-- Dynamic Cards Grid -->
+              <div class="t-results-grid" id="tResultsGrid">
+                <!-- Dynamically populated via app.js -->
               </div>
             </section>
 
