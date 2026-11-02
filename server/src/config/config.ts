@@ -27,6 +27,9 @@ export const CONFIG = {
   RAZORPAY_KEY_SECRET: process.env.RAZORPAY_KEY_SECRET || 'sutriva_razorpay_secret_dev',
   RAZORPAY_WEBHOOK_SECRET: process.env.RAZORPAY_WEBHOOK_SECRET || 'sutriva_webhook_secret_dev',
 
+  // Google Maps Platform API Key (Optional with automatic OSM/OSRM/Overpass fallback)
+  GOOGLE_MAPS_API_KEY: process.env.GOOGLE_MAPS_API_KEY || '',
+
   // Cookies
   COOKIE_SECRET: process.env.COOKIE_SECRET || 'cookie_secret_dev_mode',
   IS_PRODUCTION: process.env.NODE_ENV === 'production'

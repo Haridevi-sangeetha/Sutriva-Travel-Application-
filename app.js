@@ -5734,14 +5734,19 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   };
 
-  let leafletMapInstance = null;
+    let leafletMapInstance = null;
   let activeMarkersMap = {};
   let currentCityKey = 'yercaud';
-  let activeSelectedPlaceId = 'pagoda-point';
+  let activeSelectedPlaceId = '';
   let isSatelliteTile = false;
   let streetTileLayer = null;
   let satelliteTileLayer = null;
   let hasSyncedMongoFoodToMap = false;
+  let currentExplorerPlaces = [];
+  let isFetchingPlaces = false;
+  let cachedUserPosition = null;
+  let isStartPinPickActive = false;
+  let activeRouteLayerGroup = null;
 
   async function syncMongoFoodToMapExplorer() {
     if (hasSyncedMongoFoodToMap) return;
@@ -5759,23 +5764,20 @@ document.addEventListener('DOMContentLoaded', () => {
             MAP_EXPLORER_DATA.tiruchengode.places.push({
               id: `mongo-food-${foodItem._id}`,
               name: foodItem.name,
-              category: isVeg ? 'Food' : (foodItem.displayCategory.includes('Cafe') ? 'Cafes' : 'Food'),
+              category: isVeg ? 'Food' : (foodItem.displayCategory && foodItem.displayCategory.includes('Cafe') ? 'Cafes' : 'Food'),
               distance: Number((0.5 + (i % 6) * 0.4).toFixed(1)),
-              priceText: foodItem.priceText,
-              priceVal: foodItem.priceVal,
+              priceText: foodItem.priceText || '₹150 - ₹300',
+              priceVal: foodItem.priceVal || 200,
               verified: true,
-              rating: foodItem.rating,
-              reviews: foodItem.reviews,
+              rating: foodItem.rating || 4.5,
+              reviews: foodItem.reviews || 120,
               lat: lat,
               lng: lng,
-              thumb: foodItem.image,
-              gallery: [foodItem.image],
-              description: `${foodItem.displayCategory || 'Restaurant'} located at ${foodItem.address || foodItem.city}. Live from MongoDB localhost:27017.`
+              thumb: foodItem.image || 'https://images.unsplash.com/photo-1517248135467-4c7edcad34c4?auto=format&fit=crop&w=400&q=80',
+              gallery: [foodItem.image || 'https://images.unsplash.com/photo-1517248135467-4c7edcad34c4?auto=format&fit=crop&w=600&q=80'],
+              description: `${foodItem.displayCategory || 'Restaurant'} located at ${foodItem.address || foodItem.city || 'Tiruchengode'}. Live data from MongoDB Sutriva database.`
             });
           });
-          if (currentCityKey === 'tiruchengode') {
-            renderMapPlacesListAndPins();
-          }
         }
       }
     } catch (e) {
@@ -5808,13 +5810,13 @@ document.addEventListener('DOMContentLoaded', () => {
 
         window.leafletMapInstance = leafletMapInstance;
 
-        // Google Maps Roadmap Tiles
+        // Google Maps Roadmap Layer
         streetTileLayer = L.tileLayer('https://mt{s}.google.com/vt/lyrs=m&x={x}&y={y}&z={z}', {
           maxZoom: 20,
           subdomains: ['0', '1', '2', '3']
         }).addTo(leafletMapInstance);
 
-        // Google Maps Satellite / Hybrid Tiles
+        // Google Maps Hybrid Satellite Layer
         satelliteTileLayer = L.tileLayer('https://mt{s}.google.com/vt/lyrs=y&x={x}&y={y}&z={z}', {
           maxZoom: 20,
           subdomains: ['0', '1', '2', '3']
@@ -5832,6 +5834,7 @@ document.addEventListener('DOMContentLoaded', () => {
           ro.observe(mapElement);
         }
 
+        // Click to place custom start pin
         leafletMapInstance.on('click', async function(e) {
           if (!isStartPinPickActive) return;
           isStartPinPickActive = false;
@@ -5864,7 +5867,6 @@ document.addEventListener('DOMContentLoaded', () => {
       }
     }
 
-    // Repeated invalidateSize calls to ensure tiles load seamlessly across transitions
     [50, 150, 300, 600, 1000].forEach(delay => {
       setTimeout(() => {
         if (leafletMapInstance) {
@@ -5873,8 +5875,18 @@ document.addEventListener('DOMContentLoaded', () => {
       }, delay);
     });
 
-    renderMapPlacesListAndPins();
-    selectMapPlace(activeSelectedPlaceId);
+    // Initial load: Fetch real recommended places for current center
+    fetchAndLoadNearbyPlaces({
+      lat: cityData.center[0],
+      lng: cityData.center[1],
+      category: 'all',
+      radiusKm: 50
+    });
+
+    // Setup live autocomplete on inputs
+    setupLiveLocationAutocomplete('mapFromInput');
+    setupLiveLocationAutocomplete('mapDestInput');
+    setupLiveLocationAutocomplete('mapLocationSearchInput');
 
     // Auto-plot initial route if From and Destination are specified
     setTimeout(() => {
@@ -5886,17 +5898,107 @@ document.addEventListener('DOMContentLoaded', () => {
     }, 450);
   }
 
+  /**
+   * Fetches real-world places from Sutriva Backend API (/api/v1/places/search)
+   * Falls back gracefully to verified curated places without breaking UI
+   */
+  async function fetchAndLoadNearbyPlaces(params = {}) {
+    const {
+      lat = 11.7820,
+      lng = 78.2120,
+      category = 'all',
+      radiusKm = 50,
+      maxBudget = 'any',
+      verifiedOnly = false,
+      sortBy = 'rating'
+    } = params;
+
+    const listContainer = document.getElementById('mapPlacesCardList');
+    if (listContainer && currentExplorerPlaces.length === 0) {
+      listContainer.innerHTML = `
+        <div style="text-align:center; padding:30px 15px; color:#64748b; font-size:13px;">
+          <i class="fa-solid fa-spinner fa-spin" style="font-size:24px; color:#2563eb; margin-bottom:10px;"></i>
+          <div>Loading real-world landmarks & attractions...</div>
+        </div>
+      `;
+    }
+
+    isFetchingPlaces = true;
+
+    try {
+      const queryParams = new URLSearchParams({
+        lat: String(lat),
+        lng: String(lng),
+        category: category,
+        radius: String(radiusKm),
+        maxBudget: String(maxBudget),
+        verified: verifiedOnly ? 'true' : 'false',
+        sort: sortBy
+      });
+
+      const res = await fetch(`http://localhost:5000/api/v1/places/search?${queryParams.toString()}`);
+      if (res.ok) {
+        const json = await res.json();
+        if (json && json.success && Array.isArray(json.data) && json.data.length > 0) {
+          currentExplorerPlaces = json.data.map(p => ({
+            id: p.id,
+            name: p.name,
+            category: p.category,
+            subcategory: p.subcategory || p.category,
+            lat: p.latitude,
+            lng: p.longitude,
+            address: p.address,
+            city: p.city || '',
+            rating: p.rating !== null && p.rating !== undefined ? Number(p.rating).toFixed(1) : 'Not rated',
+            reviews: p.reviewCount !== null && p.reviewCount !== undefined ? `${p.reviewCount} reviews` : 'Reviews not available',
+            thumb: (p.photos && p.photos[0] && p.photos[0].url) ? p.photos[0].url : 'https://images.unsplash.com/photo-1506744038136-46273834b3fb?auto=format&fit=crop&w=400&q=80',
+            gallery: (p.photos && p.photos.length > 0) ? p.photos.map(ph => ph.url) : ['https://images.unsplash.com/photo-1506744038136-46273834b3fb?auto=format&fit=crop&w=600&q=80'],
+            priceText: p.entryFee || 'Not available',
+            priceVal: p.entryFeeVal !== undefined ? p.entryFeeVal : null,
+            openingHours: p.openingHours || 'Visiting hours not available',
+            verified: p.verificationStatus === 'verified',
+            distance: p.distanceKm !== undefined ? Number(p.distanceKm).toFixed(1) : '0.0',
+            description: p.description || `${p.name} is a renowned regional landmark in Tamil Nadu.`
+          }));
+
+          renderMapPlacesListAndPins();
+          if (currentExplorerPlaces.length > 0 && !activeSelectedPlaceId) {
+            selectMapPlace(currentExplorerPlaces[0].id, false);
+          }
+          isFetchingPlaces = false;
+          return;
+        }
+      }
+    } catch (err) {
+      console.warn('Real places backend search unreachable, using verified curated cache:', err);
+    }
+
+    // Fallback to verified regional places from MAP_EXPLORER_DATA
+    const cityData = MAP_EXPLORER_DATA[currentCityKey] || MAP_EXPLORER_DATA.yercaud;
+    currentExplorerPlaces = (cityData.places || []).map(p => ({
+      ...p,
+      priceText: p.priceText || (p.priceVal === 0 ? 'Free' : `₹${p.priceVal}`),
+      openingHours: p.openingHours || '08:00 AM – 06:00 PM'
+    }));
+
+    renderMapPlacesListAndPins();
+    if (currentExplorerPlaces.length > 0) {
+      selectMapPlace(currentExplorerPlaces[0].id, false);
+    }
+    isFetchingPlaces = false;
+  }
+
   const ALL_CATEGORY_SUGGESTIONS = [
     { name: 'Temples', icon: '🛕', keywords: ['temple', 'spiritual', 'shrine', 'meru', 'annamalaiyar', 'servarayan', 'kovil', 'god', 'mandir'] },
     { name: 'Cafes', icon: '☕', keywords: ['cafe', 'coffee', 'espresso', 'bakery', 'tea', 'latte', 'sweet rascal', 'cloud 9', 'bistro'] },
     { name: 'Food', icon: '🍛', keywords: ['food', 'restaurant', 'dining', 'mess', 'biryani', 'meals', 'lunch', 'dinner', 'dosa', 'cuisine'] },
-    { name: 'Forts', icon: '🏰', keywords: ['fort', 'bastion', 'castle', 'heritage', 'monument', 'aguada', 'palace', 'school'] },
+    { name: 'Views', icon: '⛰️', keywords: ['view', 'views', 'viewpoint', 'peak', 'seat', 'scenic', 'lookout', 'hills'] },
+    { name: 'Falls', icon: '🌊', keywords: ['fall', 'falls', 'waterfall', 'waterfalls', 'cascade', 'killiyur', 'agaya gangai'] },
+    { name: 'Lakes', icon: '🛶', keywords: ['lake', 'lakes', 'boating', 'water', 'pond', 'emerald', 'reservoir'] },
+    { name: 'Forts', icon: '🏰', keywords: ['fort', 'forts', 'bastion', 'castle', 'heritage', 'monument', 'sankagiri', 'namakkal'] },
     { name: 'Parks', icon: '🌳', keywords: ['park', 'garden', 'botanical', 'orchidarium', 'rose', 'gardens', 'farm'] },
-    { name: 'Trekking', icon: '🥾', keywords: ['trekking', 'trek', 'cave', 'trail', 'hike', 'climb', 'bear', 'walk'] },
-    { name: 'Beaches', icon: '🏖️', keywords: ['beach', 'coast', 'sea', 'shore', 'baga', 'marina'] },
-    { name: 'Boating', icon: '🛶', keywords: ['boating', 'boat', 'lake', 'dam', 'speed boat', 'reservoir', 'water'] },
-    { name: 'Caves', icon: '🦇', keywords: ['cave', 'cavern', 'subterranean', 'bears cave', 'rock'] },
-    { name: 'Wildlife', icon: '🦁', keywords: ['wildlife', 'zoo', 'forest', 'deer park', 'teak', 'reserve', 'safari'] },
+    { name: 'Trekking', icon: '🥾', keywords: ['trekking', 'trek', 'cave', 'trail', 'hike', 'climb', 'walk'] },
+    { name: 'Beaches', icon: '🏖️', keywords: ['beach', 'coast', 'sea', 'shore', 'marina'] },
     { name: 'Heritage', icon: '🏛️', keywords: ['heritage', 'historic', 'museum', 'monument', 'architecture'] }
   ];
 
@@ -5910,11 +6012,10 @@ document.addEventListener('DOMContentLoaded', () => {
     clearTimeout(dualLocDebounce);
     dualLocDebounce = setTimeout(() => {
       const trimmed = (val || '').trim();
-      const clean = trimmed.toLowerCase().replace(/[^a-z0-9]/g, '');
-      if (CITY_COORDINATES[clean]) {
+      if (trimmed.length >= 2) {
         applyDualSearchRecommendation();
       }
-    }, 700);
+    }, 600);
   }
 
   function clearDualLocation() {
@@ -5950,9 +6051,6 @@ document.addEventListener('DOMContentLoaded', () => {
     if (!dropdown) return;
 
     const query = (filterVal || '').trim().toLowerCase();
-    const cityData = MAP_EXPLORER_DATA[currentCityKey] || MAP_EXPLORER_DATA.yercaud;
-    const places = cityData.places || [];
-
     const matchedSuggestions = ALL_CATEGORY_SUGGESTIONS.filter(sugg => {
       if (!query) return true;
       if (sugg.name.toLowerCase().includes(query)) return true;
@@ -5960,17 +6058,16 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     if (matchedSuggestions.length === 0) {
-      dropdown.innerHTML = `<div style="padding:8px 10px; font-size:11px; color:#94a3b8; text-align:center;">No matching category. Searching place names...</div>`;
+      dropdown.innerHTML = `<div style="padding:8px 10px; font-size:11px; color:#94a3b8; text-align:center;">Searching places...</div>`;
       dropdown.style.display = 'block';
       return;
     }
 
     dropdown.innerHTML = matchedSuggestions.slice(0, 6).map(sugg => {
-      const count = places.filter(p => {
+      const count = currentExplorerPlaces.filter(p => {
         const cat = (p.category || '').toLowerCase();
         const name = (p.name || '').toLowerCase();
-        const desc = (p.description || '').toLowerCase();
-        return sugg.keywords.some(kw => cat.includes(kw) || name.includes(kw) || desc.includes(kw));
+        return sugg.keywords.some(kw => cat.includes(kw) || name.includes(kw));
       }).length;
 
       return `
@@ -6006,179 +6103,34 @@ document.addEventListener('DOMContentLoaded', () => {
     const locVal = locInput?.value?.trim() || 'Yercaud';
     const expVal = expInput?.value?.trim() || '';
 
-    // 1. Resolve Location
+    // 1. Resolve Location Coordinates
     const coord = await resolveLocationCoord(locVal);
-    const destClean = locVal.toLowerCase().replace(/[^a-z0-9]/g, '');
 
     if (coord) {
       const topDestInput = document.getElementById('mapDestInput');
       if (topDestInput) topDestInput.value = coord.name.split(',')[0];
 
-      if (!MAP_EXPLORER_DATA[destClean]) {
-        const baseName = coord.name.split(',')[0].trim();
-        MAP_EXPLORER_DATA[destClean] = {
-          name: coord.name,
-          center: [coord.lat, coord.lng],
-          zoom: 13,
-          places: [
-            {
-              id: `${destClean}-spot-1`,
-              name: `${baseName} Main Center & View`,
-              category: 'Viewpoint',
-              distance: 0.8,
-              priceText: 'Free Entry',
-              priceVal: 0,
-              verified: true,
-              rating: 4.6,
-              reviews: 320,
-              lat: coord.lat + 0.005,
-              lng: coord.lng + 0.005,
-              thumb: 'https://images.unsplash.com/photo-1506744038136-46273834b3fb?auto=format&fit=crop&w=400&q=80',
-              gallery: ['https://images.unsplash.com/photo-1506744038136-46273834b3fb?auto=format&fit=crop&w=600&q=80'],
-              description: `Central scenic viewpoint and city landmarks around ${baseName}.`
-            },
-            {
-              id: `${destClean}-spot-2`,
-              name: `${baseName} Historic Temple`,
-              category: 'Temples',
-              distance: 1.5,
-              priceText: 'Free Entry',
-              priceVal: 0,
-              verified: true,
-              rating: 4.8,
-              reviews: 540,
-              lat: coord.lat + 0.003,
-              lng: coord.lng - 0.004,
-              thumb: 'https://images.unsplash.com/photo-1544620347-c4fd4a3d5957?auto=format&fit=crop&w=400&q=80',
-              gallery: ['https://images.unsplash.com/photo-1544620347-c4fd4a3d5957?auto=format&fit=crop&w=600&q=80'],
-              description: `Renowned ancient spiritual heritage temple with majestic architecture and serene ambience.`
-            },
-            {
-              id: `${destClean}-spot-3`,
-              name: `${baseName} Artisan Cafe & Coffee Lounge`,
-              category: 'Cafes',
-              distance: 1.2,
-              priceText: '₹150 - ₹400',
-              priceVal: 280,
-              verified: true,
-              rating: 4.7,
-              reviews: 380,
-              lat: coord.lat - 0.003,
-              lng: coord.lng + 0.006,
-              thumb: 'https://images.unsplash.com/photo-1554118811-1e0d58224f24?auto=format&fit=crop&w=400&q=80',
-              gallery: ['https://images.unsplash.com/photo-1554118811-1e0d58224f24?auto=format&fit=crop&w=600&q=80'],
-              description: `Aesthetic boutique cafe serving freshly roasted artisanal coffees, waffles, and sandwiches.`
-            },
-            {
-              id: `${destClean}-spot-4`,
-              name: `${baseName} Traditional Mess & Restaurant`,
-              category: 'Food',
-              distance: 0.9,
-              priceText: '₹120 - ₹250',
-              priceVal: 180,
-              verified: true,
-              rating: 4.7,
-              reviews: 620,
-              lat: coord.lat + 0.002,
-              lng: coord.lng + 0.004,
-              thumb: 'https://images.unsplash.com/photo-1517248135467-4c7edcad34c4?auto=format&fit=crop&w=400&q=80',
-              gallery: ['https://images.unsplash.com/photo-1517248135467-4c7edcad34c4?auto=format&fit=crop&w=600&q=80'],
-              description: `Authentic regional cuisine on plantain leaves with aromatic biryani, hot tiffin, and traditional meals.`
-            },
-            {
-              id: `${destClean}-spot-5`,
-              name: `${baseName} Heritage Fort & Bastion`,
-              category: 'Forts',
-              distance: 3.2,
-              priceText: '₹25 - ₹50',
-              priceVal: 35,
-              verified: true,
-              rating: 4.5,
-              reviews: 240,
-              lat: coord.lat - 0.007,
-              lng: coord.lng - 0.006,
-              thumb: 'https://images.unsplash.com/photo-1464822759023-fed622ff2c3b?auto=format&fit=crop&w=400&q=80',
-              gallery: ['https://images.unsplash.com/photo-1464822759023-fed622ff2c3b?auto=format&fit=crop&w=600&q=80'],
-              description: `Historic rampart complex with grand stone walls, bastions, and panoramic scenic viewpoints.`
-            },
-            {
-              id: `${destClean}-spot-6`,
-              name: `${baseName} Botanical Garden & Nature Park`,
-              category: 'Parks',
-              distance: 1.8,
-              priceText: '₹20',
-              priceVal: 20,
-              verified: true,
-              rating: 4.5,
-              reviews: 310,
-              lat: coord.lat + 0.006,
-              lng: coord.lng - 0.003,
-              thumb: 'https://images.unsplash.com/photo-1518531933037-91b2f5f229cc?auto=format&fit=crop&w=400&q=80',
-              gallery: ['https://images.unsplash.com/photo-1518531933037-91b2f5f229cc?auto=format&fit=crop&w=600&q=80'],
-              description: `Lush landscaped public gardens with floral nursery walkways and quiet relaxing gazebos.`
-            },
-            {
-              id: `${destClean}-spot-7`,
-              name: `${baseName} Waterfront Lake & Boating`,
-              category: 'Lake',
-              distance: 2.2,
-              priceText: '₹60 - ₹150',
-              priceVal: 100,
-              verified: true,
-              rating: 4.6,
-              reviews: 430,
-              lat: coord.lat - 0.005,
-              lng: coord.lng + 0.008,
-              thumb: 'https://images.unsplash.com/photo-1507525428034-b723cf961d3e?auto=format&fit=crop&w=400&q=80',
-              gallery: ['https://images.unsplash.com/photo-1507525428034-b723cf961d3e?auto=format&fit=crop&w=600&q=80'],
-              description: `Tranquil freshwater lake with pedal boat rentals, promenade strolls, and sunset photo points.`
-            }
-          ]
-        };
-      }
-
-      currentCityKey = destClean;
       if (leafletMapInstance) {
         leafletMapInstance.flyTo([coord.lat, coord.lng], 13, { duration: 0.8 });
       }
-    }
 
-    // 2. Resolve Experience (Temple, Food, Cafe, etc.)
-    const cityData = MAP_EXPLORER_DATA[currentCityKey] || MAP_EXPLORER_DATA.yercaud;
-    const places = cityData.places || [];
+      // 2. Fetch real places from backend
+      const maxDist = parseFloat(document.getElementById('mapDistanceFilter')?.value || '50');
+      const budgetVal = document.getElementById('mapBudgetFilter')?.value || 'any';
+      const verifiedOnly = document.getElementById('mapVerifiedToggle')?.checked || false;
+      const sortBy = document.getElementById('mapSortSelector')?.value || 'rating';
 
-    if (expVal) {
-      const matchingCount = places.filter(p => matchesCategoryQuery(p, expVal)).length;
-      if (matchingCount === 0 && coord) {
-        const baseName = coord.name.split(',')[0].trim();
-        const customCat = expVal.charAt(0).toUpperCase() + expVal.slice(1);
-        const isTempleSearch = ['temple', 'temples', 'kovil', 'koil'].some(k => expVal.toLowerCase().includes(k));
-        const newSpot1 = {
-          id: `${destClean}-rec-${Date.now()}`,
-          name: isTempleSearch ? `${baseName} Arulmigu Historic Temple` : `${baseName} Top ${customCat} Pick`,
-          category: isTempleSearch ? 'Temples' : customCat,
-          distance: 1.2,
-          priceText: isTempleSearch ? 'Free Entry' : '₹100 - ₹300',
-          priceVal: isTempleSearch ? 0 : 150,
-          verified: true,
-          rating: 4.9,
-          reviews: 850,
-          lat: coord.lat + 0.003,
-          lng: coord.lng + 0.003,
-          thumb: isTempleSearch ? 'https://images.unsplash.com/photo-1582510003544-4d00b7f74220?auto=format&fit=crop&w=400&q=80' : 'https://images.unsplash.com/photo-1554118811-1e0d58224f24?auto=format&fit=crop&w=400&q=80',
-          gallery: [isTempleSearch ? 'https://images.unsplash.com/photo-1582510003544-4d00b7f74220?auto=format&fit=crop&w=600&q=80' : 'https://images.unsplash.com/photo-1554118811-1e0d58224f24?auto=format&fit=crop&w=600&q=80'],
-          description: isTempleSearch ? `Revered sacred temple in ${baseName} with historic Dravidian architecture and serene spiritual blessings.` : `Highly rated recommended spot for ${expVal} in ${baseName}. Celebrated by locals and travellers.`
-        };
-        places.unshift(newSpot1);
-      }
-    }
-
-    renderMapPlacesListAndPins();
-
-    const matchingPlaces = expVal ? places.filter(p => matchesCategoryQuery(p, expVal)) : places;
-    if (matchingPlaces.length > 0) {
-      matchingPlaces.sort((a, b) => b.rating - a.rating);
-      selectMapPlace(matchingPlaces[0].id, true);
+      await fetchAndLoadNearbyPlaces({
+        lat: coord.lat,
+        lng: coord.lng,
+        category: expVal || 'all',
+        radiusKm: maxDist < 900 ? maxDist : 50,
+        maxBudget: budgetVal,
+        verifiedOnly: verifiedOnly,
+        sortBy: sortBy
+      });
+    } else {
+      renderMapPlacesListAndPins();
     }
 
     if (typeof showToast === 'function') {
@@ -6206,7 +6158,8 @@ document.addEventListener('DOMContentLoaded', () => {
     if (dropdown) dropdown.style.display = 'none';
 
     document.querySelectorAll('.cat-chip-btn').forEach(btn => {
-      if (btn.getAttribute('data-cat') === catName) {
+      const chipCat = btn.getAttribute('data-cat') || '';
+      if (chipCat.toLowerCase() === catName.toLowerCase() || (catName === 'Views' && chipCat === 'Viewpoint') || (catName === 'Falls' && chipCat === 'Waterfalls')) {
         btn.classList.add('active');
       } else {
         btn.classList.remove('active');
@@ -6233,33 +6186,53 @@ document.addEventListener('DOMContentLoaded', () => {
   function matchesCategoryQuery(p, query) {
     if (!query) return false;
     const q = query.toLowerCase().trim();
+    if (q === 'all') return true;
+
     const cat = (p.category || '').toLowerCase().trim();
+    const sub = (p.subcategory || '').toLowerCase().trim();
     const name = (p.name || '').toLowerCase().trim();
     const desc = (p.description || '').toLowerCase().trim();
 
-    // STRICT TEMPLE FILTERING:
-    // If searching for temples, NEVER match non-temple categories like Forts, Cafes, Lakes, Viewpoints
+    // STRICT TEMPLE FILTERING
     const isTempleSearch = ['temple', 'temples', 'kovil', 'koil', 'shrine', 'mandir', 'spiritual'].some(k => q.includes(k) || k.includes(q));
     if (isTempleSearch) {
-      return cat === 'temples' || cat.includes('temple') || name.includes('temple') || name.includes('kovil') || name.includes('koil') || name.includes('shrine') || name.includes('mandir');
+      return cat === 'temples' || cat.includes('temple') || sub.includes('temple') || name.includes('temple') || name.includes('kovil') || name.includes('koil') || name.includes('shrine') || name.includes('mandir');
     }
 
-    // STRICT CAFE FILTERING:
+    // STRICT CAFE FILTERING
     const isCafeSearch = ['cafe', 'cafes', 'coffee', 'tea', 'bakery', 'bistro'].some(k => q.includes(k) || k.includes(q));
     if (isCafeSearch) {
-      return cat === 'cafes' || cat.includes('cafe') || name.includes('cafe') || name.includes('coffee') || desc.includes('cafe') || desc.includes('coffee');
+      return cat === 'cafes' || cat.includes('cafe') || sub.includes('cafe') || name.includes('cafe') || name.includes('coffee') || desc.includes('cafe') || desc.includes('coffee');
     }
 
-    // STRICT FOOD FILTERING:
+    // STRICT FOOD FILTERING
     const isFoodSearch = ['food', 'restaurant', 'mess', 'dining', 'lunch', 'biryani'].some(k => q.includes(k) || k.includes(q));
     if (isFoodSearch) {
-      return cat === 'food' || cat.includes('food') || cat.includes('restaurant') || name.includes('mess') || name.includes('restaurant') || desc.includes('mess') || desc.includes('meals');
+      return cat === 'food' || cat.includes('food') || sub.includes('restaurant') || name.includes('mess') || name.includes('restaurant') || desc.includes('mess') || desc.includes('meals');
     }
 
-    // STRICT FORT FILTERING:
+    // STRICT FORT FILTERING
     const isFortSearch = ['fort', 'forts', 'bastion', 'castle'].some(k => q.includes(k) || k.includes(q));
     if (isFortSearch) {
-      return cat === 'forts' || cat.includes('fort') || name.includes('fort') || name.includes('bastion');
+      return cat === 'forts' || cat.includes('fort') || sub.includes('fort') || name.includes('fort') || name.includes('bastion');
+    }
+
+    // STRICT WATERFALL FILTERING
+    const isFallSearch = ['fall', 'falls', 'waterfall', 'waterfalls', 'cascade'].some(k => q.includes(k) || k.includes(q));
+    if (isFallSearch) {
+      return cat === 'falls' || cat.includes('fall') || sub.includes('fall') || name.includes('falls') || name.includes('waterfall');
+    }
+
+    // STRICT LAKE FILTERING
+    const isLakeSearch = ['lake', 'lakes', 'boating', 'water'].some(k => q.includes(k) || k.includes(q));
+    if (isLakeSearch) {
+      return cat === 'lakes' || cat.includes('lake') || sub.includes('lake') || name.includes('lake') || name.includes('boating');
+    }
+
+    // STRICT VIEW FILTERING
+    const isViewSearch = ['view', 'views', 'viewpoint', 'peak', 'lookout', 'scenic'].some(k => q.includes(k) || k.includes(q));
+    if (isViewSearch) {
+      return cat === 'views' || cat.includes('view') || sub.includes('view') || name.includes('peak') || name.includes('seat') || name.includes('view');
     }
 
     if (cat === q || cat.includes(q) || name.includes(q)) return true;
@@ -6272,16 +6245,12 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   function renderMapPlacesListAndPins(searchOverride) {
-    const cityData = MAP_EXPLORER_DATA[currentCityKey] || MAP_EXPLORER_DATA.yercaud;
-    const places = cityData.places || [];
+    const places = currentExplorerPlaces.length > 0 ? currentExplorerPlaces : ((MAP_EXPLORER_DATA[currentCityKey] || MAP_EXPLORER_DATA.yercaud).places || []);
 
-    // Filter according to current UI selections
+    // Filter values from UI controls
     let searchVal = '';
     if (searchOverride !== undefined) {
       searchVal = searchOverride.toLowerCase().trim();
-    }
-    if (searchVal === currentCityKey || (cityData.name && cityData.name.toLowerCase().includes(searchVal))) {
-      searchVal = '';
     }
 
     const checkedCats = Array.from(document.querySelectorAll('.cat-check-item input[type="checkbox"]:checked')).map(cb => cb.value);
@@ -6289,35 +6258,54 @@ document.addEventListener('DOMContentLoaded', () => {
     const budgetVal = document.getElementById('mapBudgetFilter')?.value || 'any';
     const verifiedOnly = document.getElementById('mapVerifiedToggle')?.checked || false;
     const catSearchVal = (document.getElementById('mapCatSearchInput')?.value || '').toLowerCase().trim();
+    const sortVal = document.getElementById('mapSortSelector')?.value || 'rating';
 
     const filtered = places.filter(p => {
-      if (searchVal && !p.name.toLowerCase().includes(searchVal) && !p.category.toLowerCase().includes(searchVal) && !p.description.toLowerCase().includes(searchVal)) return false;
+      if (searchVal && !p.name.toLowerCase().includes(searchVal) && !p.category.toLowerCase().includes(searchVal) && !(p.description || '').toLowerCase().includes(searchVal)) return false;
 
-      // Category matching:
+      // Category matching
       if (catSearchVal) {
         if (!matchesCategoryQuery(p, catSearchVal)) return false;
       } else if (checkedCats.length > 0) {
         if (!checkedCats.includes(p.category)) return false;
       }
 
-      if (p.distance > maxDist) return false;
+      // Distance filter
+      const pDist = parseFloat(p.distance || p.distanceKm || '0');
+      if (maxDist < 900 && pDist > maxDist) return false;
+
+      // Verified filter
       if (verifiedOnly && !p.verified) return false;
-      if (budgetVal === 'free' && p.priceVal > 0) return false;
-      if (budgetVal === '100' && p.priceVal >= 100) return false;
-      if (budgetVal === '300' && p.priceVal >= 300) return false;
+
+      // Budget filter: Free, Under 100, 100-500, Above 500
+      const pVal = p.priceVal !== undefined && p.priceVal !== null ? p.priceVal : null;
+      if (budgetVal === 'free') {
+        const isFree = pVal === 0 || (p.priceText && p.priceText.toLowerCase().includes('free'));
+        if (!isFree) return false;
+      } else if (budgetVal === '100') {
+        if (pVal !== null && pVal >= 100) return false;
+      } else if (budgetVal === '100-500') {
+        if (pVal !== null && (pVal < 100 || pVal > 500)) return false;
+      } else if (budgetVal === '500+') {
+        if (pVal !== null && pVal <= 500) return false;
+      }
+
       return true;
     });
 
-    // Rank matching places to the top
-    if (catSearchVal) {
-      filtered.sort((a, b) => {
-        const matchA = matchesCategoryQuery(a, catSearchVal);
-        const matchB = matchesCategoryQuery(b, catSearchVal);
-        if (matchA && !matchB) return -1;
-        if (!matchA && matchB) return 1;
-        return b.rating - a.rating;
-      });
-    }
+    // Sort according to selection
+    filtered.sort((a, b) => {
+      if (sortVal === 'distance') {
+        return parseFloat(a.distance || '0') - parseFloat(b.distance || '0');
+      } else if (sortVal === 'price') {
+        return (a.priceVal || 0) - (b.priceVal || 0);
+      } else {
+        // Rating sort (default)
+        const rA = parseFloat(a.rating) || 0;
+        const rB = parseFloat(b.rating) || 0;
+        return rB - rA;
+      }
+    });
 
     // Update count badge
     const badge = document.getElementById('mapPlacesCountBadge');
@@ -6327,38 +6315,43 @@ document.addEventListener('DOMContentLoaded', () => {
     const listContainer = document.getElementById('mapPlacesCardList');
     if (listContainer) {
       if (filtered.length === 0) {
-        listContainer.innerHTML = '<div style="text-align:center; padding:30px; color:#94a3b8; font-size:13px;">No places match your filters. Try clearing some filters!</div>';
+        listContainer.innerHTML = '<div style="text-align:center; padding:35px 20px; color:#94a3b8; font-size:13px;"><i class="fa-solid fa-filter-circle-xmark" style="font-size:24px; margin-bottom:8px; display:block;"></i>No places match your filters. Try selecting a broader distance or clearing filters!</div>';
       } else {
-        listContainer.innerHTML = filtered.map(p => `
-          <div class="map-place-item-card ${p.id === activeSelectedPlaceId ? 'active' : ''}" id="placeCard-${p.id}" onclick="window.selectMapPlace('${p.id}');">
-            <img src="${p.thumb}" alt="${p.name}" class="place-card-thumb" loading="lazy" />
-            <div class="place-card-info">
-              <div class="place-card-title-row">
-                <h4 class="place-card-name">${p.name}</h4>
-                <button type="button" class="place-card-fav-btn" onclick="window.togglePlaceFav('${p.id}', event);">
-                  <i class="fa-regular fa-heart"></i>
-                </button>
-              </div>
-              <div class="place-card-meta">
-                <span>📍 ${p.category} • ${p.distance} km</span>
-              </div>
-              <div class="place-card-badges-row">
-                <span class="badge-cost">${p.priceText}</span>
-                ${p.verified ? '<span class="badge-verified"><i class="fa-solid fa-circle-check"></i> Verified</span>' : ''}
-                ${matchesCategoryQuery(p, catSearchVal) ? '<span class="badge-recommended"><i class="fa-solid fa-star"></i> Recommended</span>' : ''}
-              </div>
-              <div class="place-card-rating">
-                ★ ${p.rating} <span style="color:#64748b; font-weight:400; font-size:10px;">(${p.reviews})</span>
+        // Check saved favorites
+        const savedFavs = getSavedFavoritesList();
+
+        listContainer.innerHTML = filtered.map(p => {
+          const isFav = savedFavs.some(f => f.id === p.id);
+          return `
+            <div class="map-place-item-card ${p.id === activeSelectedPlaceId ? 'active' : ''}" id="placeCard-${p.id}" onclick="window.selectMapPlace('${p.id}');">
+              <img src="${p.thumb}" alt="${p.name}" class="place-card-thumb" loading="lazy" />
+              <div class="place-card-info">
+                <div class="place-card-title-row">
+                  <h4 class="place-card-name">${p.name}</h4>
+                  <button type="button" class="place-card-fav-btn" onclick="window.togglePlaceFav('${p.id}', event);" title="Save to Favorites" style="color:${isFav ? '#ef4444' : '#94a3b8'};">
+                    <i class="${isFav ? 'fa-solid' : 'fa-regular'} fa-heart"></i>
+                  </button>
+                </div>
+                <div class="place-card-meta">
+                  <span>📍 ${p.category} • ${p.distance} km</span>
+                </div>
+                <div class="place-card-badges-row">
+                  <span class="badge-cost">${p.priceText}</span>
+                  ${p.verified ? '<span class="badge-verified"><i class="fa-solid fa-circle-check"></i> Verified</span>' : ''}
+                  ${catSearchVal && matchesCategoryQuery(p, catSearchVal) ? '<span class="badge-recommended"><i class="fa-solid fa-star"></i> Recommended</span>' : ''}
+                </div>
+                <div class="place-card-rating">
+                  ★ ${p.rating} <span style="color:#64748b; font-weight:400; font-size:10px;">(${p.reviews})</span>
+                </div>
               </div>
             </div>
-          </div>
-        `).join('');
+          `;
+        }).join('');
       }
     }
 
     // Render Leaflet Pins
     if (leafletMapInstance && window.L) {
-      // Clear existing markers
       Object.values(activeMarkersMap).forEach(m => leafletMapInstance.removeLayer(m));
       activeMarkersMap = {};
 
@@ -6368,8 +6361,8 @@ document.addEventListener('DOMContentLoaded', () => {
           html: `
             <div class="custom-sutriva-pin ${p.id === activeSelectedPlaceId ? 'active' : ''}" id="pin-${p.id}">
               <i class="fa-solid ${
-                p.category === 'Waterfall' ? 'fa-water' : 
-                p.category === 'Lake' ? 'fa-ship' : 
+                p.category === 'Falls' || p.category === 'Waterfall' ? 'fa-water' : 
+                p.category === 'Lakes' || p.category === 'Lake' ? 'fa-ship' : 
                 p.category === 'Temples' ? 'fa-gopuram' : 
                 p.category === 'Cafes' ? 'fa-mug-hot' : 
                 p.category === 'Food' ? 'fa-utensils' : 
@@ -6386,7 +6379,6 @@ document.addEventListener('DOMContentLoaded', () => {
 
         const marker = L.marker([p.lat, p.lng], { icon: pinIcon }).addTo(leafletMapInstance);
 
-        // Custom InfoWindow Popup matching Mockup
         const popupContent = `
           <div class="map-infowindow-card">
             <img src="${p.thumb}" alt="${p.name}" class="map-infowindow-thumb" />
@@ -6397,9 +6389,14 @@ document.addEventListener('DOMContentLoaded', () => {
                 <span class="badge-cost" style="font-size:9px;">${p.priceText}</span>
                 ${p.verified ? '<span class="badge-verified" style="font-size:9px;">✓ Verified</span>' : ''}
               </div>
-              <button type="button" onclick="window.getLiveRouteToPlace('${encodeURIComponent(p.name)}', ${p.lat}, ${p.lng}); event.stopPropagation();" style="margin-top:6px; background:#059669; color:#fff; border:none; border-radius:6px; font-size:10px; font-weight:700; padding:3px 8px; cursor:pointer; display:flex; align-items:center; gap:4px;">
-                <i class="fa-solid fa-route"></i> Get Live Route
-              </button>
+              <div style="display:flex; gap:6px; margin-top:6px;">
+                <button type="button" onclick="window.getLiveRouteToPlace('${encodeURIComponent(p.name)}', ${p.lat}, ${p.lng}); event.stopPropagation();" style="background:#059669; color:#fff; border:none; border-radius:6px; font-size:10px; font-weight:700; padding:3px 8px; cursor:pointer; display:flex; align-items:center; gap:4px;">
+                  <i class="fa-solid fa-route"></i> Directions
+                </button>
+                <button type="button" onclick="window.selectMapPlace('${p.id}', true); event.stopPropagation();" style="background:#2563eb; color:#fff; border:none; border-radius:6px; font-size:10px; font-weight:700; padding:3px 8px; cursor:pointer;">
+                  View Details
+                </button>
+              </div>
             </div>
           </div>
         `;
@@ -6432,8 +6429,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
   function selectMapPlace(placeId, shouldPan = true) {
     activeSelectedPlaceId = placeId;
-    const cityData = MAP_EXPLORER_DATA[currentCityKey] || MAP_EXPLORER_DATA.yercaud;
-    const place = cityData.places.find(p => p.id === placeId) || cityData.places[0];
+    const places = currentExplorerPlaces.length > 0 ? currentExplorerPlaces : ((MAP_EXPLORER_DATA[currentCityKey] || MAP_EXPLORER_DATA.yercaud).places || []);
+    const place = places.find(p => p.id === placeId) || places[0];
     if (!place) return;
 
     toggleDetailsPanel(true);
@@ -6446,7 +6443,7 @@ document.addEventListener('DOMContentLoaded', () => {
       targetCard.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
     }
 
-    // Update marker pins active state
+    // Update pin active state
     document.querySelectorAll('.custom-sutriva-pin').forEach(pin => pin.classList.remove('active'));
     const targetPin = document.getElementById(`pin-${place.id}`);
     if (targetPin) targetPin.classList.add('active');
@@ -6462,15 +6459,21 @@ document.addEventListener('DOMContentLoaded', () => {
       }, 300);
     }
 
-    // Render Right Place Details Panel (Matching Mockup)
+    // Check saved state
+    const savedFavs = getSavedFavoritesList();
+    const isFav = savedFavs.some(f => f.id === place.id);
+
+    // Render Right Place Details Panel (Matching Mockup with Real Data)
     const detailsContainer = document.getElementById('mapPlaceDetailsCard');
     if (detailsContainer) {
       detailsContainer.innerHTML = `
         <div class="details-hero-box">
-          <img src="${place.gallery[0] || place.thumb}" alt="${place.name}" class="details-hero-img" />
+          <img src="${(place.gallery && place.gallery[0]) || place.thumb}" alt="${place.name}" class="details-hero-img" />
           <div class="details-hero-actions">
-            <button class="details-action-btn" onclick="window.toggleDetailsPanel(false);" title="Close Details (Full-Width Map)"><i class="fa-solid fa-xmark"></i></button>
-            <button class="details-action-btn" onclick="window.togglePlaceFav('${place.id}', event);" title="Save Place"><i class="fa-regular fa-heart"></i></button>
+            <button class="details-action-btn" onclick="window.toggleDetailsPanel(false);" title="Close Details"><i class="fa-solid fa-xmark"></i></button>
+            <button class="details-action-btn" onclick="window.togglePlaceFav('${place.id}', event);" title="Save Place" style="color:${isFav ? '#ef4444' : '#ffffff'};">
+              <i class="${isFav ? 'fa-solid' : 'fa-regular'} fa-heart"></i>
+            </button>
           </div>
         </div>
 
@@ -6479,16 +6482,18 @@ document.addEventListener('DOMContentLoaded', () => {
           <div class="details-location-text">
             <i class="fa-solid fa-location-dot" style="color:#059669;"></i> ${place.category} • ${place.distance} km from center
           </div>
+          ${place.address ? `<div style="font-size:11px; color:#64748b; margin-top:2px;">📍 ${place.address}</div>` : ''}
         </div>
 
         <div class="details-badges-row">
           <span class="badge-cost" style="font-size:12px; padding:3px 8px;">${place.priceText}</span>
           ${place.verified ? '<span class="badge-verified" style="font-size:12px; padding:3px 8px;"><i class="fa-solid fa-circle-check"></i> Verified</span>' : ''}
+          ${place.openingHours ? `<span style="font-size:11px; background:#f1f5f9; color:#475569; padding:3px 8px; border-radius:6px;"><i class="fa-regular fa-clock"></i> ${place.openingHours}</span>` : ''}
         </div>
 
         <div class="details-rating-row">
-          <span>★ ${place.rating}</span>
-          <span style="color:#64748b; font-weight:500; font-size:12px;">(${place.reviews} verified reviews)</span>
+          <span style="color:#f59e0b; font-weight:700;">★ ${place.rating}</span>
+          <span style="color:#64748b; font-weight:500; font-size:12px;">(${place.reviews})</span>
         </div>
 
         <p class="details-desc-text">
@@ -6506,7 +6511,7 @@ document.addEventListener('DOMContentLoaded', () => {
           <i class="fa-solid fa-route"></i> Get Directions (Live Route on Map)
         </button>
         <button type="button" class="btn-open-google-ext" onclick="window.openExternalGoogleMapsNavigation('${encodeURIComponent(place.name)}', ${place.lat}, ${place.lng});" title="Open Turn-by-Turn GPS in Google Maps app">
-          <i class="fa-solid fa-diamond-turn-right"></i> Open in Google Maps App
+          <i class="fa-solid fa-diamond-turn-right"></i> Open in Google Maps App (Navigate)
         </button>
       `;
     }
@@ -6515,11 +6520,18 @@ document.addEventListener('DOMContentLoaded', () => {
   function changeMapCity(cityKey) {
     if (MAP_EXPLORER_DATA[cityKey]) {
       currentCityKey = cityKey;
-      const firstPlace = MAP_EXPLORER_DATA[cityKey].places[0];
-      activeSelectedPlaceId = firstPlace ? firstPlace.id : '';
-      initExploreMapPage();
+      const city = MAP_EXPLORER_DATA[cityKey];
+      if (leafletMapInstance) {
+        leafletMapInstance.flyTo(city.center, city.zoom);
+      }
+      fetchAndLoadNearbyPlaces({
+        lat: city.center[0],
+        lng: city.center[1],
+        category: 'all',
+        radiusKm: 50
+      });
       if (typeof showToast === 'function') {
-        showToast(`Loaded map and attractions for ${MAP_EXPLORER_DATA[cityKey].name}! 🗺️`);
+        showToast(`Loaded map and attractions for ${city.name}! 🗺️`);
       }
     }
   }
@@ -6531,30 +6543,20 @@ document.addEventListener('DOMContentLoaded', () => {
   function resetMapFilters() {
     document.querySelectorAll('.cat-check-item input[type="checkbox"]').forEach(cb => cb.checked = true);
     clearCategorySearch();
-    const searchInput = document.getElementById('mapSearchInput');
-    if (searchInput) searchInput.value = '';
     const distFilter = document.getElementById('mapDistanceFilter');
     if (distFilter) distFilter.value = '999';
     const budgetFilter = document.getElementById('mapBudgetFilter');
     if (budgetFilter) budgetFilter.value = 'any';
     const verifiedToggle = document.getElementById('mapVerifiedToggle');
     if (verifiedToggle) verifiedToggle.checked = true;
+    const sortSel = document.getElementById('mapSortSelector');
+    if (sortSel) sortSel.value = 'rating';
 
     renderMapPlacesListAndPins();
-    if (typeof showToast === 'function') showToast('Filters cleared');
+    if (typeof showToast === 'function') showToast('Filters reset to default');
   }
 
   function sortMapPlaces(criteria) {
-    const cityData = MAP_EXPLORER_DATA[currentCityKey];
-    if (!cityData) return;
-
-    if (criteria === 'distance') {
-      cityData.places.sort((a, b) => a.distance - b.distance);
-    } else if (criteria === 'rating') {
-      cityData.places.sort((a, b) => b.rating - a.rating);
-    } else if (criteria === 'price') {
-      cityData.places.sort((a, b) => a.priceVal - b.priceVal);
-    }
     renderMapPlacesListAndPins();
   }
 
@@ -6562,26 +6564,40 @@ document.addEventListener('DOMContentLoaded', () => {
     if (navigator.geolocation) {
       if (typeof showToast === 'function') showToast('Locating your position via GPS... 📍');
       navigator.geolocation.getCurrentPosition(
-        (pos) => {
+        async (pos) => {
+          const lat = pos.coords.latitude;
+          const lng = pos.coords.longitude;
           if (leafletMapInstance) {
-            leafletMapInstance.flyTo([pos.coords.latitude, pos.coords.longitude], 15);
-            L.circleMarker([pos.coords.latitude, pos.coords.longitude], {
+            leafletMapInstance.flyTo([lat, lng], 14);
+            L.circleMarker([lat, lng], {
               radius: 9,
               color: '#1877f2',
               fillColor: '#3b82f6',
               fillOpacity: 0.9
             }).addTo(leafletMapInstance).bindPopup('You are here! 📍').openPopup();
           }
-          if (typeof showToast === 'function') showToast('Found your location! Pinpointed on map.');
+
+          // Fetch real nearby places around user
+          await fetchAndLoadNearbyPlaces({
+            lat: lat,
+            lng: lng,
+            category: 'all',
+            radiusKm: 25
+          });
+
+          if (typeof showToast === 'function') showToast('Found your location! Showing nearby places.');
         },
         () => {
-          // Fallback to active place
-          selectMapPlace(activeSelectedPlaceId);
-          if (typeof showToast === 'function') showToast('Showing closest popular viewpoint in Yercaud!');
+          if (typeof showToast === 'function') showToast('GPS access denied. Showing top places in Yercaud.');
+          if (currentExplorerPlaces.length > 0) {
+            selectMapPlace(currentExplorerPlaces[0].id);
+          }
         }
       );
     } else {
-      selectMapPlace(activeSelectedPlaceId);
+      if (currentExplorerPlaces.length > 0) {
+        selectMapPlace(currentExplorerPlaces[0].id);
+      }
     }
   }
 
@@ -6634,31 +6650,171 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   }
 
-  function togglePlaceFav(placeId, event) {
-    if (event) event.stopPropagation();
-    const btn = event?.currentTarget;
-    if (btn) {
-      const icon = btn.querySelector('i');
-      if (icon) {
-        if (icon.classList.contains('fa-regular')) {
-          icon.classList.remove('fa-regular');
-          icon.classList.add('fa-solid');
-          btn.style.color = '#ef4444';
-          if (typeof showToast === 'function') showToast('Saved place to your Favorites! ❤️');
-        } else {
-          icon.classList.remove('fa-solid');
-          icon.classList.add('fa-regular');
-          btn.style.color = '#94a3b8';
-          if (typeof showToast === 'function') showToast('Removed from Favorites');
-        }
-      }
+  // --- Favorites Persistence & MongoDB Synchronization ---
+  function getSavedFavoritesList() {
+    try {
+      const raw = localStorage.getItem('sutriva_favorites');
+      return raw ? JSON.parse(raw) : [];
+    } catch (e) {
+      return [];
     }
   }
 
-  let cachedUserPosition = null;
-  let isStartPinPickActive = false;
+  async function togglePlaceFav(placeId, event) {
+    if (event) event.stopPropagation();
+    const places = currentExplorerPlaces.length > 0 ? currentExplorerPlaces : ((MAP_EXPLORER_DATA[currentCityKey] || MAP_EXPLORER_DATA.yercaud).places || []);
+    const place = places.find(p => p.id === placeId);
+    if (!place) return;
 
+    let favs = getSavedFavoritesList();
+    const existingIndex = favs.findIndex(f => f.id === placeId);
+    let isNowSaved = false;
+
+    if (existingIndex > -1) {
+      // Remove
+      favs.splice(existingIndex, 1);
+      isNowSaved = false;
+      if (typeof showToast === 'function') showToast('Removed from Favorites');
+
+      // Sync with MongoDB backend if logged in
+      try {
+        if (typeof secureFetch === 'function') {
+          await secureFetch(`/users/me/favorites/${placeId}`, { method: 'DELETE' });
+        }
+      } catch (err) {
+        console.warn('Backend favorite remove skipped:', err);
+      }
+    } else {
+      // Add
+      favs.push({
+        id: place.id,
+        name: place.name,
+        category: place.category,
+        latitude: place.lat,
+        longitude: place.lng,
+        address: place.address || '',
+        rating: place.rating,
+        thumb: place.thumb,
+        photos: place.gallery ? place.gallery.map(u => ({ url: u })) : [{ url: place.thumb }],
+        entryFee: place.priceText,
+        savedAt: new Date().toISOString()
+      });
+      isNowSaved = true;
+      if (typeof showToast === 'function') showToast('Saved place to your Favorites! ❤️');
+
+      // Sync with MongoDB backend if logged in
+      try {
+        if (typeof secureFetch === 'function') {
+          await secureFetch('/users/me/favorites', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              id: place.id,
+              name: place.name,
+              category: place.category,
+              latitude: place.lat,
+              longitude: place.lng,
+              address: place.address || '',
+              rating: typeof place.rating === 'string' && place.rating.includes('.') ? parseFloat(place.rating) : null,
+              entryFee: place.priceText,
+              photos: place.gallery ? place.gallery.map(u => ({ url: u })) : [{ url: place.thumb }]
+            })
+          });
+        }
+      } catch (err) {
+        console.warn('Backend favorite add skipped:', err);
+      }
+    }
+
+    try {
+      localStorage.setItem('sutriva_favorites', JSON.stringify(favs));
+    } catch (e) {}
+
+    // Update heart icons across the UI
+    document.querySelectorAll(`.place-card-fav-btn[onclick*="${placeId}"] i`).forEach(icon => {
+      icon.className = isNowSaved ? 'fa-solid fa-heart' : 'fa-regular fa-heart';
+      icon.parentElement.style.color = isNowSaved ? '#ef4444' : '#94a3b8';
+    });
+
+    const detailsFavIcon = document.querySelector(`.details-action-btn[onclick*="${placeId}"] i`);
+    if (detailsFavIcon) {
+      detailsFavIcon.className = isNowSaved ? 'fa-solid fa-heart' : 'fa-regular fa-heart';
+      detailsFavIcon.parentElement.style.color = isNowSaved ? '#ef4444' : '#ffffff';
+    }
+
+    // Refresh profile favorites grid if active
+    loadProfileFavorites();
+  }
+
+  function loadProfileFavorites() {
+    const grid = document.getElementById('profileSavedFavoritesGrid');
+    if (!grid) return;
+
+    const favs = getSavedFavoritesList();
+    if (favs.length === 0) {
+      grid.innerHTML = `
+        <div style="grid-column: 1 / -1; text-align: center; padding: 40px 20px; color: #94a3b8;">
+          <i class="fa-regular fa-heart" style="font-size: 32px; color: #cbd5e1; margin-bottom: 12px; display: block;"></i>
+          <h4 style="font-size: 15px; color: #475569; margin-bottom: 4px;">No saved favorites yet</h4>
+          <p style="font-size: 13px;">Explore the Sutriva Map and click the heart icon on any temple, viewpoint, or cafe to save it here!</p>
+          <button type="button" onclick="switchPage('map')" style="margin-top: 14px; background: #2563eb; color: #fff; border: none; padding: 8px 18px; border-radius: 8px; font-weight: 700; cursor: pointer;">Explore Map</button>
+        </div>
+      `;
+      return;
+    }
+
+    grid.innerHTML = favs.map(f => `
+      <div style="background: var(--bg-card, #fff); border: 1px solid var(--border-color, #e2e8f0); border-radius: 12px; overflow: hidden; display: flex; flex-direction: column; box-shadow: 0 2px 8px rgba(0,0,0,0.04);">
+        <img src="${f.thumb || (f.photos && f.photos[0] && f.photos[0].url) || 'https://images.unsplash.com/photo-1506744038136-46273834b3fb?auto=format&fit=crop&w=400&q=80'}" alt="${f.name}" style="width: 100%; height: 140px; object-fit: cover;" />
+        <div style="padding: 12px; flex: 1; display: flex; flex-direction: column;">
+          <div style="display: flex; justify-content: space-between; align-items: flex-start; gap: 8px;">
+            <h4 style="font-size: 14px; font-weight: 700; color: var(--text-primary, #0f172a); margin: 0;">${f.name}</h4>
+            <button type="button" onclick="window.removeSavedFavorite('${f.id}')" style="background: none; border: none; color: #ef4444; cursor: pointer; padding: 2px;" title="Remove favorite"><i class="fa-solid fa-trash"></i></button>
+          </div>
+          <div style="font-size: 12px; color: #059669; font-weight: 600; margin-top: 4px;">📍 ${f.category}</div>
+          <div style="font-size: 11px; color: #64748b; margin-top: 2px;">${f.address || 'Tamil Nadu'}</div>
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-top: auto; padding-top: 10px;">
+            <span style="font-size: 11px; font-weight: 700; background: #f1f5f9; color: #475569; padding: 2px 6px; border-radius: 4px;">${f.entryFee || 'Free'}</span>
+            <button type="button" onclick="switchPage('map'); setTimeout(() => window.selectMapPlace('${f.id}', true), 200);" style="background: #2563eb; color: #fff; border: none; border-radius: 6px; padding: 4px 10px; font-size: 11.5px; font-weight: 700; cursor: pointer;">
+              View on Map
+            </button>
+          </div>
+        </div>
+      </div>
+    `).join('');
+  }
+
+  function removeSavedFavorite(placeId) {
+    togglePlaceFav(placeId);
+  }
+
+  function switchProfileSection(secId, btn) {
+    document.querySelectorAll('.profile-sec-card').forEach(sec => sec.style.display = 'none');
+    document.querySelectorAll('.profile-nav-item').forEach(b => b.classList.remove('active'));
+
+    const targetSec = document.getElementById(`psec-${secId}`);
+    if (targetSec) targetSec.style.display = 'block';
+    if (btn) btn.classList.add('active');
+
+    if (secId === 'favorites') {
+      loadProfileFavorites();
+    }
+  }
+
+  // --- Real-world Geocoding via Backend API ---
   async function reverseGeocodeCoord(lat, lng) {
+    try {
+      const res = await fetch(`http://localhost:5000/api/v1/places/reverse-geocode?lat=${lat}&lng=${lng}`);
+      if (res.ok) {
+        const data = await res.json();
+        if (data && data.success && data.data && data.data.name) {
+          return data.data.name;
+        }
+      }
+    } catch (e) {
+      console.warn('Backend reverse geocode unreachable, using OSM fallback:', e);
+    }
+
     try {
       const url = `https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}`;
       const res = await fetch(url, { headers: { 'Accept': 'application/json' } });
@@ -6668,10 +6824,132 @@ document.addEventListener('DOMContentLoaded', () => {
         const place = addr.town || addr.village || addr.suburb || addr.city || addr.county || addr.state_district;
         if (place) return place;
       }
-    } catch (e) {
-      console.warn('Reverse geocode fetch error:', e);
-    }
+    } catch (e) {}
+
     return null;
+  }
+
+  async function resolveLocationCoord(inputStr) {
+    if (!inputStr) return null;
+    const clean = inputStr.toLowerCase().trim().replace(/[^a-z0-9]/g, '');
+
+    // 1. Direct dictionary match
+    if (CITY_COORDINATES[clean]) {
+      return CITY_COORDINATES[clean];
+    }
+
+    // 2. Query Sutriva Backend Geocode Endpoint
+    try {
+      const res = await fetch(`http://localhost:5000/api/v1/places/geocode?address=${encodeURIComponent(inputStr)}`);
+      if (res.ok) {
+        const data = await res.json();
+        if (data && data.success && data.data) {
+          const resolved = {
+            name: data.data.name,
+            lat: data.data.lat,
+            lng: data.data.lng,
+            formattedAddress: data.data.formattedAddress
+          };
+          CITY_COORDINATES[clean] = resolved;
+          return resolved;
+        }
+      }
+    } catch (e) {
+      console.warn('Backend geocode error, using fallback:', e);
+    }
+
+    // 3. Fallback substring dictionary match
+    for (const [key, item] of Object.entries(CITY_COORDINATES)) {
+      if (clean.includes(key) || key.includes(clean)) {
+        return item;
+      }
+    }
+
+    // 4. Fallback direct Nominatim search
+    try {
+      const geoUrl = `https://nominatim.openstreetmap.org/search?format=json&limit=1&q=${encodeURIComponent(inputStr + ', Tamil Nadu, India')}`;
+      const res = await fetch(geoUrl, { headers: { 'Accept': 'application/json' } });
+      const data = await res.json();
+      if (data && data.length > 0) {
+        const top = data[0];
+        const formattedName = inputStr.trim().charAt(0).toUpperCase() + inputStr.trim().slice(1);
+        const resolved = {
+          name: formattedName,
+          lat: parseFloat(top.lat),
+          lng: parseFloat(top.lon)
+        };
+        CITY_COORDINATES[clean] = resolved;
+        return resolved;
+      }
+    } catch (e) {}
+
+    return null;
+  }
+
+  // --- Real Location Autocomplete ---
+  function setupLiveLocationAutocomplete(inputId) {
+    const input = document.getElementById(inputId);
+    if (!input) return;
+
+    let dropdown = document.getElementById(`autoDropdown_${inputId}`);
+    if (!dropdown) {
+      dropdown = document.createElement('div');
+      dropdown.id = `autoDropdown_${inputId}`;
+      dropdown.className = 'sutriva-autocomplete-dropdown';
+      dropdown.style.cssText = 'position:absolute; background:#fff; border:1px solid #cbd5e1; border-radius:8px; box-shadow:0 8px 24px rgba(0,0,0,0.12); width:100%; max-height:220px; overflow-y:auto; z-index:9999; display:none; margin-top:4px;';
+      input.parentElement.style.position = 'relative';
+      input.parentElement.appendChild(dropdown);
+    }
+
+    let debounceTimer = null;
+    input.addEventListener('input', () => {
+      const query = input.value.trim();
+      clearTimeout(debounceTimer);
+      if (query.length < 2) {
+        dropdown.style.display = 'none';
+        return;
+      }
+
+      debounceTimer = setTimeout(async () => {
+        try {
+          const res = await fetch(`http://localhost:5000/api/v1/places/autocomplete?input=${encodeURIComponent(query)}`);
+          if (res.ok) {
+            const data = await res.json();
+            if (data && data.success && Array.isArray(data.data) && data.data.length > 0) {
+              dropdown.innerHTML = data.data.map(item => `
+                <div class="sutriva-auto-item" style="padding:8px 12px; font-size:12px; cursor:pointer; border-bottom:1px solid #f1f5f9; display:flex; align-items:center; gap:8px;" onmouseover="this.style.background='#f8fafc';" onmouseout="this.style.background='#fff';" onclick="window.selectAutocompleteItem('${inputId}', '${encodeURIComponent(item.text)}')">
+                  <i class="fa-solid fa-location-dot" style="color:#2563eb; font-size:11px;"></i>
+                  <span style="font-weight:600; color:#1e293b;">${item.text}</span>
+                </div>
+              `).join('');
+              dropdown.style.display = 'block';
+              return;
+            }
+          }
+        } catch (e) {}
+        dropdown.style.display = 'none';
+      }, 250);
+    });
+
+    document.addEventListener('click', (e) => {
+      if (!input.contains(e.target) && !dropdown.contains(e.target)) {
+        dropdown.style.display = 'none';
+      }
+    });
+  }
+
+  function selectAutocompleteItem(inputId, itemTextEncoded) {
+    const text = decodeURIComponent(itemTextEncoded);
+    const input = document.getElementById(inputId);
+    if (input) input.value = text.split(',')[0];
+    const dropdown = document.getElementById(`autoDropdown_${inputId}`);
+    if (dropdown) dropdown.style.display = 'none';
+
+    if (inputId === 'mapDestInput' || inputId === 'mapFromInput') {
+      searchMapRoute();
+    } else if (inputId === 'mapLocationSearchInput') {
+      applyDualSearchRecommendation();
+    }
   }
 
   async function setStartCity(cityName) {
@@ -6694,7 +6972,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   async function useCurrentGpsLocation() {
     if (typeof showToast === 'function') {
-      showToast('📡 Accessing device GPS position...');
+      showToast('📡 Requesting device GPS coordinates...');
     }
     if (navigator.geolocation) {
       navigator.geolocation.getCurrentPosition(
@@ -6713,17 +6991,21 @@ document.addEventListener('DOMContentLoaded', () => {
             const fromCoord = { name: detected, lat, lng };
             await calculateAndDrawLiveRoute(fromCoord, destCoord);
             if (typeof showToast === 'function') {
-              showToast(`📍 Detected position: ${detected.split(',')[0]}. Drag green pin to adjust anytime!`);
+              showToast(`📍 GPS Position: ${detected.split(',')[0]}. Route calculated!`);
             }
           }
         },
         (err) => {
           if (typeof showToast === 'function') {
-            showToast('Unable to fetch GPS. Pick your city from chips (Tiruchengode, Salem, etc.) 📍');
+            showToast('GPS access denied or unavailable. Please pick your city from the quick chips (Tiruchengode, Salem, etc.) 📍');
           }
         },
         { enableHighAccuracy: true, timeout: 8000 }
       );
+    } else {
+      if (typeof showToast === 'function') {
+        showToast('Geolocation is not supported by your browser. Please select a city manually.');
+      }
     }
   }
 
@@ -6744,7 +7026,6 @@ document.addEventListener('DOMContentLoaded', () => {
       lng: parseFloat(destLng)
     };
 
-    // 1. Check if user typed an explicit origin in mapFromInput
     const fromVal = document.getElementById('mapFromInput')?.value?.trim();
     if (fromVal && fromVal.toLowerCase() !== 'my current location' && fromVal.toLowerCase() !== destCoord.name.toLowerCase()) {
       const fromCoord = await resolveLocationCoord(fromVal);
@@ -6757,19 +7038,11 @@ document.addEventListener('DOMContentLoaded', () => {
       }
     }
 
-    if (typeof showToast === 'function') {
-      showToast(`Locating your current GPS position... 📍`);
-    }
-
     if (navigator.geolocation) {
       navigator.geolocation.getCurrentPosition(
         async (pos) => {
-          cachedUserPosition = {
-            lat: pos.coords.latitude,
-            lng: pos.coords.longitude
-          };
           const detectedTown = await reverseGeocodeCoord(pos.coords.latitude, pos.coords.longitude);
-          const startLabel = detectedTown ? `${detectedTown}` : 'My Current Location';
+          const startLabel = detectedTown ? `${detectedTown}` : 'Current Location';
           const fromCoord = {
             name: startLabel,
             lat: pos.coords.latitude,
@@ -6777,11 +7050,10 @@ document.addEventListener('DOMContentLoaded', () => {
           };
           await calculateAndDrawLiveRoute(fromCoord, destCoord);
         },
-        async (err) => {
-          console.warn('Geolocation unavailable/denied:', err);
+        async () => {
           await fallbackRouteToPlace(destCoord);
         },
-        { enableHighAccuracy: true, timeout: 8000, maximumAge: 60000 }
+        { enableHighAccuracy: true, timeout: 7000 }
       );
     } else {
       await fallbackRouteToPlace(destCoord);
@@ -6789,26 +7061,16 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   async function fallbackRouteToPlace(destCoord) {
-    // 1. Try from input if specified
-    const fromVal = document.getElementById('mapFromInput')?.value?.trim();
     let fromCoord = null;
-    if (fromVal && fromVal.toLowerCase() !== destCoord.name.toLowerCase() && fromVal.toLowerCase() !== 'my current location') {
+    const fromVal = document.getElementById('mapFromInput')?.value?.trim();
+    if (fromVal) {
       fromCoord = await resolveLocationCoord(fromVal);
     }
 
-    // 2. Fallback to location search input
-    if (!fromCoord) {
-      const locVal = document.getElementById('mapLocationSearchInput')?.value?.trim();
-      if (locVal && locVal.toLowerCase() !== destCoord.name.toLowerCase()) {
-        fromCoord = await resolveLocationCoord(locVal);
-      }
-    }
-
-    // 3. Fallback to currentCityKey center
     if (!fromCoord) {
       const cityData = MAP_EXPLORER_DATA[currentCityKey] || MAP_EXPLORER_DATA.tiruchengode || MAP_EXPLORER_DATA.yercaud;
       fromCoord = {
-        name: cityData.name ? cityData.name.split(',')[0] : 'Current City Center',
+        name: cityData.name ? cityData.name.split(',')[0] : 'Tiruchengode',
         lat: cityData.center[0],
         lng: cityData.center[1]
       };
@@ -6821,6 +7083,10 @@ document.addEventListener('DOMContentLoaded', () => {
     await calculateAndDrawLiveRoute(fromCoord, destCoord);
   }
 
+  /**
+   * Real Route Calculation using Sutriva Backend API (/api/v1/places/route)
+   * Displays highway polyline, draggable Start pin, and floating summary card
+   */
   async function calculateAndDrawLiveRoute(fromCoord, destCoord) {
     const fromInput = document.getElementById('mapFromInput');
     const toInput = document.getElementById('mapDestInput');
@@ -6829,10 +7095,43 @@ document.addEventListener('DOMContentLoaded', () => {
 
     clearActiveRoute(false);
 
-    // Call real free OSRM Driving Router for highway road geometry
-    const osrmUrl = `https://router.project-osrm.org/route/v1/driving/${fromCoord.lng},${fromCoord.lat};${destCoord.lng},${destCoord.lat}?overview=full&geometries=geojson`;
-
     try {
+      const res = await fetch('http://localhost:5000/api/v1/places/route', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          fromLat: fromCoord.lat,
+          fromLng: fromCoord.lng,
+          toLat: destCoord.lat,
+          toLng: destCoord.lng,
+          mode: 'driving'
+        })
+      });
+
+      if (res.ok) {
+        const json = await res.json();
+        if (json && json.success && json.data) {
+          const route = json.data;
+          const distKm = route.distanceKm;
+          const hours = Math.floor(route.durationMinutes / 60);
+          const mins = route.durationMinutes % 60;
+          const timeStr = hours > 0 ? `${hours} hrs ${mins} mins` : `${mins} mins`;
+
+          drawRouteOnMap(route.geometry, fromCoord, destCoord, distKm, timeStr);
+
+          if (typeof showToast === 'function') {
+            showToast(`🚗 Road Route: ${fromCoord.name.split(',')[0]} ➔ ${destCoord.name} (${distKm} km • ${timeStr})`);
+          }
+          return;
+        }
+      }
+    } catch (err) {
+      console.warn('Backend route calculation unreachable, using direct OSRM:', err);
+    }
+
+    // Direct OSRM Fallback
+    try {
+      const osrmUrl = `https://router.project-osrm.org/route/v1/driving/${fromCoord.lng},${fromCoord.lat};${destCoord.lng},${destCoord.lat}?overview=full&geometries=geojson`;
       const resp = await fetch(osrmUrl);
       const data = await resp.json();
 
@@ -6844,17 +7143,11 @@ document.addEventListener('DOMContentLoaded', () => {
         const timeStr = hours > 0 ? `${hours} hrs ${mins} mins` : `${mins} mins`;
 
         drawRouteOnMap(route.geometry, fromCoord, destCoord, distKm, timeStr);
-
-        if (typeof showToast === 'function') {
-          showToast(`🚗 Route: ${fromCoord.name.split(',')[0]} ➔ ${destCoord.name} (${distKm} km • ${timeStr})`);
-        }
-      } else {
-        drawFallbackRoute(fromCoord, destCoord);
+        return;
       }
-    } catch (err) {
-      console.warn('OSRM routing fetch issue, using smooth route fallback:', err);
-      drawFallbackRoute(fromCoord, destCoord);
-    }
+    } catch (e) {}
+
+    drawFallbackRoute(fromCoord, destCoord);
   }
 
   function openPlaceGoogleDirections(placeName, lat, lng) {
@@ -6862,18 +7155,20 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   function openExternalGoogleMapsNavigation(placeName, lat, lng) {
-    const url = `https://www.google.com/maps/dir/?api=1&destination=${lat},${lng}&destination_place_id=${placeName}`;
+    const fromVal = document.getElementById('mapFromInput')?.value.trim() || '';
+    const originParam = fromVal ? `&origin=${encodeURIComponent(fromVal)}` : '';
+    const url = `https://www.google.com/maps/dir/?api=1${originParam}&destination=${lat},${lng}`;
     window.open(url, '_blank');
   }
 
   const CITY_COORDINATES = {
-    // Tamil Nadu Major Cities & Towns
-    chennai: { name: 'Chennai, Tamil Nadu', lat: 13.0827, lng: 80.2707 },
-    tiruchengode: { name: 'Tiruchengode, Tamil Nadu', lat: 11.3787, lng: 77.8949 },
-    tiruchengodu: { name: 'Tiruchengode, Tamil Nadu', lat: 11.3787, lng: 77.8949 },
-    namakkal: { name: 'Namakkal, Tamil Nadu', lat: 11.2189, lng: 78.1674 },
+    tiruchengode: { name: 'Tiruchengode, Tamil Nadu', lat: 11.3787, lng: 77.8967 },
+    tiruchengodu: { name: 'Tiruchengode, Tamil Nadu', lat: 11.3787, lng: 77.8967 },
     salem: { name: 'Salem, Tamil Nadu', lat: 11.6643, lng: 78.1460 },
+    yercaud: { name: 'Yercaud, Tamil Nadu', lat: 11.7753, lng: 78.2093 },
+    chennai: { name: 'Chennai, Tamil Nadu', lat: 13.0827, lng: 80.2707 },
     erode: { name: 'Erode, Tamil Nadu', lat: 11.3410, lng: 77.7172 },
+    namakkal: { name: 'Namakkal, Tamil Nadu', lat: 11.2189, lng: 78.1674 },
     coimbatore: { name: 'Coimbatore, Tamil Nadu', lat: 11.0168, lng: 76.9558 },
     tiruppur: { name: 'Tiruppur, Tamil Nadu', lat: 11.1085, lng: 77.3411 },
     karur: { name: 'Karur, Tamil Nadu', lat: 10.9601, lng: 78.0766 },
@@ -6882,120 +7177,12 @@ document.addEventListener('DOMContentLoaded', () => {
     trichy: { name: 'Tiruchirappalli, Tamil Nadu', lat: 10.7905, lng: 78.7047 },
     tiruchirappalli: { name: 'Tiruchirappalli, Tamil Nadu', lat: 10.7905, lng: 78.7047 },
     thanjavur: { name: 'Thanjavur, Tamil Nadu', lat: 10.7870, lng: 79.1378 },
-    kumbakonam: { name: 'Kumbakonam, Tamil Nadu', lat: 10.9602, lng: 79.3845 },
-    vellore: { name: 'Vellore, Tamil Nadu', lat: 12.9165, lng: 79.1325 },
-    hosur: { name: 'Hosur, Tamil Nadu', lat: 12.7409, lng: 77.8253 },
-    dharmapuri: { name: 'Dharmapuri, Tamil Nadu', lat: 12.1211, lng: 78.1582 },
-    krishnagiri: { name: 'Krishnagiri, Tamil Nadu', lat: 12.5186, lng: 78.2137 },
-    tiruvannamalai: { name: 'Tiruvannamalai, Tamil Nadu', lat: 12.2253, lng: 79.0747 },
-    kanchipuram: { name: 'Kanchipuram, Tamil Nadu', lat: 12.8342, lng: 79.7036 },
-    chengalpattu: { name: 'Chengalpattu, Tamil Nadu', lat: 12.6841, lng: 79.9836 },
-    villupuram: { name: 'Villupuram, Tamil Nadu', lat: 11.9401, lng: 79.4861 },
-    cuddalore: { name: 'Cuddalore, Tamil Nadu', lat: 11.7480, lng: 79.7714 },
-    tirunelveli: { name: 'Tirunelveli, Tamil Nadu', lat: 8.7139, lng: 77.7567 },
-    thoothukudi: { name: 'Thoothukudi, Tamil Nadu', lat: 8.7642, lng: 78.1348 },
-    kanyakumari: { name: 'Kanyakumari, Tamil Nadu', lat: 8.0883, lng: 77.5385 },
-    nagercoil: { name: 'Nagercoil, Tamil Nadu', lat: 8.1833, lng: 77.4119 },
-    rameswaram: { name: 'Rameswaram, Tamil Nadu', lat: 9.2876, lng: 79.3129 },
-    pollachi: { name: 'Pollachi, Tamil Nadu', lat: 10.6609, lng: 77.0048 },
-    valparai: { name: 'Valparai, Tamil Nadu', lat: 10.3262, lng: 76.9554 },
-    kollihills: { name: 'Kolli Hills, Tamil Nadu', lat: 11.2485, lng: 78.3389 },
-    rasipuram: { name: 'Rasipuram, Tamil Nadu', lat: 11.4633, lng: 78.1793 },
-    sankari: { name: 'Sankari, Tamil Nadu', lat: 11.4889, lng: 77.8687 },
-    bhavani: { name: 'Bhavani, Tamil Nadu', lat: 11.4500, lng: 77.6833 },
-    komarapalayam: { name: 'Komarapalayam, Tamil Nadu', lat: 11.4428, lng: 77.7078 },
-    perundurai: { name: 'Perundurai, Tamil Nadu', lat: 11.2778, lng: 77.5833 },
-    puducherry: { name: 'Puducherry', lat: 11.9416, lng: 79.8083 },
-    pondicherry: { name: 'Puducherry', lat: 11.9416, lng: 79.8083 },
-
-    // Hill Stations & Vacation Hotspots
-    yercaud: { name: 'Yercaud, Tamil Nadu', lat: 11.7820, lng: 78.2120 },
     ooty: { name: 'Ooty, Nilgiris', lat: 11.4102, lng: 76.6950 },
-    coonoor: { name: 'Coonoor, Nilgiris', lat: 11.3530, lng: 76.7959 },
     kodaikanal: { name: 'Kodaikanal, Tamil Nadu', lat: 10.2381, lng: 77.4892 },
-    munnar: { name: 'Munnar, Kerala', lat: 10.0889, lng: 77.0595 },
-    goa: { name: 'Goa (Panaji)', lat: 15.4924, lng: 73.8180 },
-    manali: { name: 'Manali, Himachal Pradesh', lat: 32.2396, lng: 77.1887 },
-    wayanad: { name: 'Wayanad, Kerala', lat: 11.6854, lng: 76.1320 },
-    coorg: { name: 'Coorg, Karnataka', lat: 12.4244, lng: 75.7382 },
-    chikmagalur: { name: 'Chikmagalur, Karnataka', lat: 13.3161, lng: 75.7720 },
-
-    // Other Major Metros
     bangalore: { name: 'Bengaluru, Karnataka', lat: 12.9716, lng: 77.5946 },
     bengaluru: { name: 'Bengaluru, Karnataka', lat: 12.9716, lng: 77.5946 },
-    mysore: { name: 'Mysuru, Karnataka', lat: 12.2958, lng: 76.6394 },
-    hyderabad: { name: 'Hyderabad, Telangana', lat: 17.3850, lng: 78.4867 },
-    kochi: { name: 'Kochi, Kerala', lat: 9.9312, lng: 76.2673 },
-    trivandrum: { name: 'Thiruvananthapuram, Kerala', lat: 8.5241, lng: 76.9366 },
-    mumbai: { name: 'Mumbai, Maharashtra', lat: 19.0760, lng: 72.8777 },
-    pune: { name: 'Pune, Maharashtra', lat: 18.5204, lng: 73.8567 },
-    delhi: { name: 'New Delhi', lat: 28.6139, lng: 77.2090 },
-    jaipur: { name: 'Jaipur, Rajasthan', lat: 26.9124, lng: 75.7873 }
+    goa: { name: 'Goa', lat: 15.2993, lng: 74.1240 }
   };
-
-  let activeRouteLayerGroup = null;
-
-  async function resolveLocationCoord(inputStr) {
-    if (!inputStr) return null;
-    const clean = inputStr.toLowerCase().trim().replace(/[^a-z0-9]/g, '');
-
-    // 1. Direct dictionary key match
-    if (CITY_COORDINATES[clean]) {
-      return CITY_COORDINATES[clean];
-    }
-
-    // 2. Substring match in dictionary
-    for (const [key, item] of Object.entries(CITY_COORDINATES)) {
-      if (clean.includes(key) || key.includes(clean)) {
-        return item;
-      }
-    }
-
-    // 3. Substring match in MAP_EXPLORER_DATA
-    for (const [key, data] of Object.entries(MAP_EXPLORER_DATA)) {
-      if (clean.includes(key) || (data.name && data.name.toLowerCase().includes(clean))) {
-        return { name: data.name, lat: data.center[0], lng: data.center[1] };
-      }
-    }
-
-    // 4. Live Nominatim Geocoding API for ANY town/city/place
-    try {
-      const geoUrl = `https://nominatim.openstreetmap.org/search?format=json&limit=1&q=${encodeURIComponent(inputStr + ', Tamil Nadu, India')}`;
-      const res = await fetch(geoUrl, { headers: { 'Accept': 'application/json' } });
-      const data = await res.json();
-      if (data && data.length > 0) {
-        const top = data[0];
-        const formattedName = inputStr.trim().charAt(0).toUpperCase() + inputStr.trim().slice(1);
-        const resolved = {
-          name: formattedName,
-          lat: parseFloat(top.lat),
-          lng: parseFloat(top.lon)
-        };
-        CITY_COORDINATES[clean] = resolved;
-        return resolved;
-      }
-
-      // Retry without Tamil Nadu restriction (global search)
-      const globalUrl = `https://nominatim.openstreetmap.org/search?format=json&limit=1&q=${encodeURIComponent(inputStr)}`;
-      const resG = await fetch(globalUrl, { headers: { 'Accept': 'application/json' } });
-      const dataG = await resG.json();
-      if (dataG && dataG.length > 0) {
-        const topG = dataG[0];
-        const formattedName = inputStr.trim().charAt(0).toUpperCase() + inputStr.trim().slice(1);
-        const resolved = {
-          name: formattedName,
-          lat: parseFloat(topG.lat),
-          lng: parseFloat(topG.lon)
-        };
-        CITY_COORDINATES[clean] = resolved;
-        return resolved;
-      }
-    } catch (e) {
-      console.warn('Geocoding fetch error for:', inputStr, e);
-    }
-
-    return null;
-  }
 
   function swapMapFromTo() {
     const fromEl = document.getElementById('mapFromInput');
@@ -7005,7 +7192,7 @@ document.addEventListener('DOMContentLoaded', () => {
       fromEl.value = destEl.value;
       destEl.value = temp;
       if (typeof showToast === 'function') {
-        showToast('Swapped From and Destination! 🔄');
+        showToast('Swapped From and Destination! 🔄 Recalculating route...');
       }
       searchMapRoute();
     }
@@ -7018,7 +7205,6 @@ document.addEventListener('DOMContentLoaded', () => {
       return;
     }
 
-    // Check if query directly matches a pre-loaded city key
     for (const cityKey of Object.keys(MAP_EXPLORER_DATA)) {
       const cityData = MAP_EXPLORER_DATA[cityKey];
       if (cityKey === query || cityData.name.toLowerCase() === query) {
@@ -7055,161 +7241,23 @@ document.addEventListener('DOMContentLoaded', () => {
       return;
     }
 
-    // Check if destination matches or is added to MAP_EXPLORER_DATA
+    // Set destination city as explorer reference
     const destClean = destVal.toLowerCase().replace(/[^a-z0-9]/g, '');
-    let matchedCityKey = null;
-    for (const cityKey of Object.keys(MAP_EXPLORER_DATA)) {
-      if (destClean.includes(cityKey) || cityKey.includes(destClean)) {
-        matchedCityKey = cityKey;
-        break;
-      }
-    }
-
-    if (matchedCityKey) {
-      currentCityKey = matchedCityKey;
-      const firstPlace = MAP_EXPLORER_DATA[matchedCityKey].places[0];
-      activeSelectedPlaceId = firstPlace ? firstPlace.id : '';
-    } else {
-      // Dynamically add destination to MAP_EXPLORER_DATA with real center coordinates
-      const baseName = destCoord.name.split(',')[0].trim();
-      MAP_EXPLORER_DATA[destClean] = {
-        name: destCoord.name,
-        center: [destCoord.lat, destCoord.lng],
-        zoom: 13,
-        places: [
-          {
-            id: `${destClean}-spot-1`,
-            name: `${baseName} Main Center`,
-            category: 'Viewpoint',
-            distance: 0.8,
-            priceText: 'Free Entry',
-            priceVal: 0,
-            verified: true,
-            rating: 4.6,
-            reviews: 320,
-            lat: destCoord.lat + 0.005,
-            lng: destCoord.lng + 0.005,
-            thumb: 'https://images.unsplash.com/photo-1506744038136-46273834b3fb?auto=format&fit=crop&w=400&q=80',
-            gallery: ['https://images.unsplash.com/photo-1506744038136-46273834b3fb?auto=format&fit=crop&w=600&q=80'],
-            description: `Central tourist attraction and landmarks around ${baseName}.`
-          },
-          {
-            id: `${destClean}-spot-2`,
-            name: `${baseName} Scenic Hills & Nature`,
-            category: 'Hills & Nature',
-            distance: 2.4,
-            priceText: 'Free Entry',
-            priceVal: 0,
-            verified: true,
-            rating: 4.5,
-            reviews: 180,
-            lat: destCoord.lat - 0.006,
-            lng: destCoord.lng + 0.004,
-            thumb: 'https://images.unsplash.com/photo-1464822759023-fed622ff2c3b?auto=format&fit=crop&w=400&q=80',
-            gallery: ['https://images.unsplash.com/photo-1464822759023-fed622ff2c3b?auto=format&fit=crop&w=600&q=80'],
-            description: `Scenic viewpoints and beautiful countryside landscapes around ${baseName}.`
-          },
-          {
-            id: `${destClean}-spot-3`,
-            name: `${baseName} Historic Temple`,
-            category: 'Temples',
-            distance: 1.8,
-            priceText: 'Free Entry',
-            priceVal: 0,
-            verified: true,
-            rating: 4.8,
-            reviews: 540,
-            lat: destCoord.lat + 0.003,
-            lng: destCoord.lng - 0.005,
-            thumb: 'https://images.unsplash.com/photo-1544620347-c4fd4a3d5957?auto=format&fit=crop&w=400&q=80',
-            gallery: ['https://images.unsplash.com/photo-1544620347-c4fd4a3d5957?auto=format&fit=crop&w=600&q=80'],
-            description: `Renowned ancient spiritual heritage temple with magnificent Dravidian gopuram sculptures and serene atmosphere.`
-          },
-          {
-            id: `${destClean}-spot-4`,
-            name: `${baseName} Heritage Fort & Bastion`,
-            category: 'Forts',
-            distance: 3.6,
-            priceText: '₹25 - ₹50',
-            priceVal: 35,
-            verified: true,
-            rating: 4.4,
-            reviews: 210,
-            lat: destCoord.lat - 0.008,
-            lng: destCoord.lng - 0.007,
-            thumb: 'https://images.unsplash.com/photo-1464822759023-fed622ff2c3b?auto=format&fit=crop&w=400&q=80',
-            gallery: ['https://images.unsplash.com/photo-1464822759023-fed622ff2c3b?auto=format&fit=crop&w=600&q=80'],
-            description: `Historic stone rampart fort complex offering sweeping panoramic vistas and rich regional history.`
-          },
-          {
-            id: `${destClean}-spot-5`,
-            name: `${baseName} Botanical Garden & Park`,
-            category: 'Parks',
-            distance: 1.5,
-            priceText: '₹20',
-            priceVal: 20,
-            verified: true,
-            rating: 4.5,
-            reviews: 320,
-            lat: destCoord.lat + 0.007,
-            lng: destCoord.lng - 0.002,
-            thumb: 'https://images.unsplash.com/photo-1518531933037-91b2f5f229cc?auto=format&fit=crop&w=400&q=80',
-            gallery: ['https://images.unsplash.com/photo-1518531933037-91b2f5f229cc?auto=format&fit=crop&w=600&q=80'],
-            description: `Lush green public botanical park with flowering pathways, children play area, and relaxing fountains.`
-          },
-          {
-            id: `${destClean}-spot-6`,
-            name: `${baseName} Lake & Boating`,
-            category: 'Lake',
-            distance: 2.1,
-            priceText: '₹50 - ₹120',
-            priceVal: 80,
-            verified: true,
-            rating: 4.6,
-            reviews: 410,
-            lat: destCoord.lat - 0.004,
-            lng: destCoord.lng + 0.009,
-            thumb: 'https://images.unsplash.com/photo-1507525428034-b723cf961d3e?auto=format&fit=crop&w=400&q=80',
-            gallery: ['https://images.unsplash.com/photo-1507525428034-b723cf961d3e?auto=format&fit=crop&w=600&q=80'],
-            description: `Tranquil freshwater lake offering leisurely paddle boat rides and scenic lakeside sunset promenade.`
-          }
-        ]
-      };
+    if (MAP_EXPLORER_DATA[destClean]) {
       currentCityKey = destClean;
-      activeSelectedPlaceId = `${destClean}-spot-1`;
     }
 
-    renderMapPlacesListAndPins();
-    selectMapPlace(activeSelectedPlaceId, false);
+    // Calculate Route & Polyline
+    await calculateAndDrawLiveRoute(fromCoord, destCoord);
 
-    if (typeof showToast === 'function') {
-      showToast(`Plotting route: ${fromCoord.name.split(',')[0]} ➔ ${destCoord.name.split(',')[0]}... 🚗💨`);
-    }
-
-    clearActiveRoute(false);
-
-    // Call real free OSRM Driving Router for highway road geometry
-    const osrmUrl = `https://router.project-osrm.org/route/v1/driving/${fromCoord.lng},${fromCoord.lat};${destCoord.lng},${destCoord.lat}?overview=full&geometries=geojson`;
-
-    try {
-      const resp = await fetch(osrmUrl);
-      const data = await resp.json();
-
-      if (data && data.code === 'Ok' && data.routes && data.routes.length > 0) {
-        const route = data.routes[0];
-        const distKm = Math.round(route.distance / 1000);
-        const hours = Math.floor(route.duration / 3600);
-        const mins = Math.round((route.duration % 3600) / 60);
-        const timeStr = hours > 0 ? `${hours} hrs ${mins} mins` : `${mins} mins`;
-
-        drawRouteOnMap(route.geometry, fromCoord, destCoord, distKm, timeStr);
-      } else {
-        drawFallbackRoute(fromCoord, destCoord);
-      }
-    } catch (err) {
-      console.warn('OSRM routing fetch issue, using smooth route fallback:', err);
-      drawFallbackRoute(fromCoord, destCoord);
-    }
+    // Fetch real attractions around destination
+    const maxDist = parseFloat(document.getElementById('mapDistanceFilter')?.value || '50');
+    await fetchAndLoadNearbyPlaces({
+      lat: destCoord.lat,
+      lng: destCoord.lng,
+      category: 'all',
+      radiusKm: maxDist < 900 ? maxDist : 50
+    });
   }
 
   function drawRouteOnMap(geojsonGeometry, fromCoord, destCoord, distKm, timeStr) {
@@ -7217,7 +7265,6 @@ document.addEventListener('DOMContentLoaded', () => {
 
     clearActiveRoute(false);
 
-    // Darker outline for highway track
     const glowLayer = L.geoJSON(geojsonGeometry, {
       style: {
         color: '#1d4ed8',
@@ -7228,7 +7275,6 @@ document.addEventListener('DOMContentLoaded', () => {
       }
     });
 
-    // Vibrant Blue main driving route
     const roadLayer = L.geoJSON(geojsonGeometry, {
       style: {
         color: '#2563eb',
@@ -7239,7 +7285,6 @@ document.addEventListener('DOMContentLoaded', () => {
       }
     });
 
-    // Start Marker (DRAGGABLE for pinpoint accuracy)
     const startName = fromCoord.name.split(',')[0];
     const startIcon = L.divIcon({
       className: 'route-marker-wrapper',
@@ -7265,7 +7310,6 @@ document.addEventListener('DOMContentLoaded', () => {
       }
     });
 
-    // Destination Marker
     const destName = destCoord.name.split(',')[0];
     const endIcon = L.divIcon({
       className: 'route-marker-wrapper',
@@ -7277,24 +7321,22 @@ document.addEventListener('DOMContentLoaded', () => {
 
     activeRouteLayerGroup = L.layerGroup([glowLayer, roadLayer, startMarker, endMarker]).addTo(leafletMapInstance);
 
-    // Zoom and frame complete road route on the screen
     const bounds = roadLayer.getBounds();
     leafletMapInstance.fitBounds(bounds, {
       padding: [60, 60],
       maxZoom: 13
     });
 
-    // Show floating route details card on the map
+    // Floating Route Summary
     const routeBox = document.getElementById('mapRouteSummaryFloating');
     const distText = document.getElementById('routeDistanceText');
     const hwayText = document.getElementById('routeHighwayText');
     if (routeBox && distText) {
       distText.innerHTML = `<strong>${distKm} km</strong> (${timeStr})`;
-      if (hwayText) hwayText.textContent = `Fastest road route: ${startName} ➔ ${destName}`;
+      if (hwayText) hwayText.textContent = `Fastest highway road: ${startName} ➔ ${destName}`;
       routeBox.style.display = 'flex';
     }
 
-    // Also prepend Route Overview to left places list
     prependRouteSummaryToPlacesList(startName, destName, distKm, timeStr);
   }
 
@@ -7311,7 +7353,7 @@ document.addEventListener('DOMContentLoaded', () => {
         <div class="route-trip-stat-grid">
           <div class="trip-stat-item"><span class="val">${distKm} km</span><span class="lbl">Distance</span></div>
           <div class="trip-stat-item"><span class="val">${timeStr}</span><span class="lbl">Drive Time</span></div>
-          <div class="trip-stat-item"><span class="val">Live GPS</span><span class="lbl">Optimal</span></div>
+          <div class="trip-stat-item"><span class="val">Live Highway</span><span class="lbl">Optimal</span></div>
         </div>
       </div>
     `;
@@ -7394,6 +7436,10 @@ document.addEventListener('DOMContentLoaded', () => {
   window.enableStartPinClickMode = enableStartPinClickMode;
   window.reverseGeocodeCoord = reverseGeocodeCoord;
   window.toggleDetailsPanel = toggleDetailsPanel;
+  window.selectAutocompleteItem = selectAutocompleteItem;
+  window.switchProfileSection = switchProfileSection;
+  window.loadProfileFavorites = loadProfileFavorites;
+  window.removeSavedFavorite = removeSavedFavorite;
 
   // =========================================================================
   // GOVERNMENT PUBLIC TRANSPORT BUS PORTAL (MONGODB localhost:27017)
