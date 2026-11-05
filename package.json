@@ -1,20 +1,29 @@
 {
   "name": "sutriva-travel-app",
   "version": "1.0.0",
-  "description": "Sutriva - Plan. Compare. Travel. Responsive Web & Mobile App in Flutter",
-  "main": "index.html",
+  "description": "Sutriva - Plan. Compare. Travel. Full MERN Stack Application",
+  "main": "client/index.html",
   "scripts": {
-    "dev": "npx -y serve . -p 8080",
-    "start": "npx -y serve . -p 8080"
+    "dev": "concurrently -n \"SERVER,CLIENT\" -c \"cyan,magenta\" \"npm run dev:server\" \"npm run dev:client\"",
+    "dev:server": "cd server && npm run dev",
+    "dev:client": "cd client && npm run dev",
+    "build:client": "cd client && npm run build",
+    "build:server": "cd server && npm run build",
+    "build": "npm run build:client && npm run build:server",
+    "preview": "cd client && npm run preview",
+    "legacy": "npx -y serve . -p 8080"
   },
   "keywords": [
-    "flutter",
-    "flutter-web",
-    "travel",
-    "responsive",
-    "mobile"
+    "mern",
+    "mongodb",
+    "express",
+    "react",
+    "node",
+    "travel"
   ],
   "author": "Sutriva Team",
   "license": "ISC",
-  "dependencies": {}
+  "devDependencies": {
+    "concurrently": "^9.1.2"
+  }
 }

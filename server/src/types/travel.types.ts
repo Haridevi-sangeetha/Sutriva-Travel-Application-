@@ -133,3 +133,4 @@ export interface OfferVerificationResult {
   bookingUrl?: string;
   message: string;
 }
+

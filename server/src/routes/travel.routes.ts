@@ -25,3 +25,4 @@ router.post('/offers/:offerId/verify', verifyOfferController);
 router.get('/providers/status', getProvidersStatusController);
 
 export default router;
+

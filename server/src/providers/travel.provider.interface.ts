@@ -10,3 +10,4 @@ export interface ITravelProvider {
   
   verifyOffer(offerId: string): Promise<OfferVerificationResult>;
 }
+

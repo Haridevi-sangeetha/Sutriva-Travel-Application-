@@ -78,3 +78,4 @@ export const AIRLINE_LOGOS: Record<string, { name: string; logoUrl: string }> = 
   MH: { name: 'Malaysia Airlines', logoUrl: 'https://images.unsplash.com/photo-1544620347-c4fd4a3d5957?auto=format&fit=crop&w=120&q=80' },
   BA: { name: 'British Airways', logoUrl: 'https://images.unsplash.com/photo-1544620347-c4fd4a3d5957?auto=format&fit=crop&w=120&q=80' }
 };
+

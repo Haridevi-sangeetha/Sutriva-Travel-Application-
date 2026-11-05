@@ -245,3 +245,4 @@ export class AmadeusProvider implements ITravelProvider {
 }
 
 export const amadeusProvider = new AmadeusProvider();
+
