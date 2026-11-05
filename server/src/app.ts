@@ -9,6 +9,7 @@ import paymentRoutes from './routes/payment.routes';
 import foodRoutes from './routes/food.routes';
 import busRoutes from './routes/bus.routes';
 import placesRoutes from './routes/places.routes';
+import travelRoutes from './routes/travel.routes';
 import { apiRateLimiter } from './middleware/rateLimiter';
 import { logger } from './utils/logger';
 
@@ -64,6 +65,7 @@ app.use('/api/v1/payments', paymentRoutes);
 app.use('/api/v1/food', foodRoutes);
 app.use('/api/v1/buses', busRoutes);
 app.use('/api/v1/places', placesRoutes);
+app.use('/api/v1/travel', travelRoutes);
 
 // Health Check Endpoint
 app.get('/health', (_req: Request, res: Response) => {

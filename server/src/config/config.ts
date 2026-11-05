@@ -30,6 +30,15 @@ export const CONFIG = {
   // Google Maps Platform API Key (Optional with automatic OSM/OSRM/Overpass fallback)
   GOOGLE_MAPS_API_KEY: process.env.GOOGLE_MAPS_API_KEY || '',
 
+  // External Travel APIs (Flights, Railways, OSRM)
+  AMADEUS_CLIENT_ID: process.env.AMADEUS_CLIENT_ID || '',
+  AMADEUS_CLIENT_SECRET: process.env.AMADEUS_CLIENT_SECRET || '',
+  AMADEUS_ENV: process.env.AMADEUS_ENV || 'test', // 'test' or 'production'
+  DUFFEL_ACCESS_TOKEN: process.env.DUFFEL_ACCESS_TOKEN || '',
+  RAPIDAPI_KEY: process.env.RAPIDAPI_KEY || '',
+  IRCTC_API_KEY: process.env.IRCTC_API_KEY || '',
+  OSRM_ROUTER_URL: process.env.OSRM_ROUTER_URL || 'https://router.project-osrm.org',
+
   // Cookies
   COOKIE_SECRET: process.env.COOKIE_SECRET || 'cookie_secret_dev_mode',
   IS_PRODUCTION: process.env.NODE_ENV === 'production'
