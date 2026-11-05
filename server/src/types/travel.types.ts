@@ -115,13 +115,55 @@ export interface TravelOffer {
   lastUpdated: string;
 }
 
+export interface MultiModalAlternative {
+  suggestedMode: 'Trains' | 'Buses' | 'Cabs';
+  reason: string;
+  trains?: {
+    available: boolean;
+    count: number;
+    fastest: string;
+    startingPrice: number;
+    popularOption: string;
+  };
+  buses?: {
+    available: boolean;
+    count: number;
+    fastest: string;
+    startingPrice: number;
+    popularOption: string;
+  };
+  cabs?: {
+    distanceKm: number;
+    duration: string;
+    estimatedCost: number;
+  };
+}
+
+export interface ConnectingFlightOption {
+  carrier: string;
+  airlineCode: string;
+  flightNumbers: string[];
+  route: string;
+  originCode: string;
+  stopoverCode: string;
+  destCode: string;
+  departureTime: string;
+  arrivalTime: string;
+  totalDuration: string;
+  layoverDuration: string;
+  startingPrice: number;
+}
+
 export interface TravelSearchResponse {
   searchId: string;
   timestamp: string;
   query: TravelSearchRequest;
   providerStatus: Record<string, { available: boolean; source: string; message: string }>;
+  hasDirectFlights?: boolean;
   totalCount: number;
   offers: TravelOffer[];
+  alternatives?: MultiModalAlternative;
+  connectingFlights?: ConnectingFlightOption[];
 }
 
 export interface OfferVerificationResult {

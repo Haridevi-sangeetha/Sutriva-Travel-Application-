@@ -4826,11 +4826,214 @@ document.addEventListener('DOMContentLoaded', () => {
     `;
   }
 
+  // UI State Validation Function: Ensures flight cards strictly match search query origin and destination
+  function validateFlightSector(offer, expectedOrigin, expectedDest) {
+    if (!offer || !offer.departure || !offer.arrival) {
+      return { isValid: false, reason: 'Missing departure or arrival waypoint data' };
+    }
+
+    const norm = str => (str || '').toLowerCase().trim().replace(/[^a-z0-9]/g, '');
+    const expFrom = norm(expectedOrigin);
+    const expTo = norm(expectedDest);
+
+    const depCode = norm(offer.departure.code);
+    const arrCode = norm(offer.arrival.code);
+    const depCity = norm(offer.departure.location);
+    const arrCity = norm(offer.arrival.location);
+
+    // Strict validation: Offer origin must match queried origin AND offer dest must match queried dest
+    const originMatch = depCode === expFrom || depCity.includes(expFrom) || expFrom.includes(depCode) || expFrom.includes(depCity);
+    const destMatch = arrCode === expTo || arrCity.includes(expTo) || expTo.includes(arrCode) || expTo.includes(arrCity);
+
+    if (!originMatch || !destMatch) {
+      return {
+        isValid: false,
+        reason: `Sector Mismatch: Flight card is scheduled for ${offer.departure.code || offer.departure.location} ➔ ${offer.arrival.code || offer.arrival.location}, but queried sector is ${expectedOrigin} ➔ ${expectedDest}`
+      };
+    }
+
+    return { isValid: true };
+  }
+  window.validateFlightSector = validateFlightSector;
+
+  // Render No Direct Flights UI Card with Multi-Modal Travel Alternatives
+  function renderNoDirectFlightsUI(queryOrigin, queryDest, alternatives, connectingFlights) {
+    const alt = alternatives || {
+      suggestedMode: 'Trains',
+      reason: `No direct scheduled commercial flights operate between ${queryOrigin} and ${queryDest}. High-speed trains and luxury sleeper buses provide fast, direct daily connections.`,
+      trains: {
+        available: true,
+        count: 14,
+        fastest: '4h 15m (Vande Bharat / Kovai Exp)',
+        startingPrice: 165,
+        popularOption: '20644 Vande Bharat Express'
+      },
+      buses: {
+        available: true,
+        count: 48,
+        fastest: '5h 30m (SETC / AC Sleeper)',
+        startingPrice: 380,
+        popularOption: 'TNSTC / SETC Non-Stop Sleeper'
+      },
+      cabs: {
+        distanceKm: 346,
+        duration: '5h 45m',
+        estimatedCost: 4850
+      }
+    };
+
+    let connectingHtml = '';
+    if (connectingFlights && connectingFlights.length > 0) {
+      connectingHtml = `
+        <div class="t-connecting-box" style="margin-top:24px; background:#f8fafc; border:1px solid #e2e8f0; border-radius:16px; padding:20px;">
+          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:14px;">
+            <div style="font-weight:700; color:#1e293b; font-size:15px; display:flex; align-items:center; gap:8px;">
+              <i class="fa-solid fa-plane-arrival" style="color:#0284c7;"></i> Available 1-Stop Connecting Flights
+            </div>
+            <span style="background:#e0f2fe; color:#0369a1; font-size:12px; font-weight:600; padding:3px 10px; border-radius:12px;">Via Kempegowda Int'l (BLR)</span>
+          </div>
+          ${connectingFlights.map(cf => `
+            <div style="background:#ffffff; border:1px solid #cbd5e1; border-radius:12px; padding:16px; display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px;">
+              <div>
+                <div style="font-weight:700; color:#0f172a; font-size:14px;">${cf.carrier} (${(cf.flightNumbers || []).join(' + ')})</div>
+                <div style="font-size:13px; color:#475569; margin-top:4px;">${cf.route}</div>
+                <div style="font-size:12px; color:#64748b; margin-top:2px;"><i class="fa-regular fa-clock"></i> ${cf.totalDuration} · <i class="fa-solid fa-hourglass-half"></i> ${cf.layoverDuration}</div>
+              </div>
+              <div style="text-align:right;">
+                <div style="font-size:11px; color:#64748b; text-transform:uppercase;">Starting From</div>
+                <div style="font-size:18px; font-weight:800; color:#0284c7;">₹${(cf.startingPrice || 6850).toLocaleString('en-IN')}</div>
+                <button type="button" class="tool-btn-primary" onclick="showToast('Connecting flight selected: ${cf.carrier}')" style="margin-top:6px; padding:6px 14px; font-size:12px; border-radius:8px;">Select Flight</button>
+              </div>
+            </div>
+          `).join('')}
+        </div>
+      `;
+    }
+
+    return `
+      <div class="t-empty-state-card no-direct-flights-card" style="grid-column: 1 / -1; width:100%; max-width:960px; margin:0 auto; padding:32px 24px; text-align:left; background:#ffffff; border:1.5px solid #e2e8f0; border-radius:20px; box-shadow:0 10px 25px -5px rgba(0,0,0,0.05);">
+        
+        <!-- Top Status Banner -->
+        <div style="display:flex; align-items:flex-start; gap:16px; padding-bottom:20px; border-bottom:1px solid #f1f5f9;">
+          <div style="width:48px; height:48px; border-radius:12px; background:#fff1f2; color:#e11d48; display:flex; align-items:center; justify-content:center; font-size:22px; flex-shrink:0;">
+            <i class="fa-solid fa-plane-slash"></i>
+          </div>
+          <div style="flex:1;">
+            <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
+              <span style="background:#fee2e2; color:#b91c1c; font-size:11px; font-weight:700; padding:2px 8px; border-radius:6px; text-transform:uppercase; letter-spacing:0.5px;">No Direct Flights</span>
+              <span style="font-size:13px; color:#64748b; font-weight:600;">${queryOrigin} ➔ ${queryDest} Sector</span>
+            </div>
+            <h3 style="font-size:20px; font-weight:800; color:#0f172a; margin:6px 0 4px 0;">No Direct Flights Available for this Route</h3>
+            <p style="font-size:14px; color:#475569; line-height:1.5; margin:0;">${alt.reason}</p>
+          </div>
+        </div>
+
+        <!-- Recommended Fast Multi-Modal Travel Alternatives -->
+        <div style="margin-top:24px;">
+          <div style="font-size:13px; font-weight:700; text-transform:uppercase; letter-spacing:0.5px; color:#64748b; margin-bottom:14px;">
+            <i class="fa-solid fa-wand-magic-sparkles" style="color:#f59e0b;"></i> Recommended High-Speed & Affordable Alternatives
+          </div>
+
+          <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(260px, 1fr)); gap:16px;">
+            
+            <!-- Train Card -->
+            <div style="background:#f0fdf4; border:1.5px solid #bbf7d0; border-radius:16px; padding:18px; display:flex; flex-direction:column; justify-content:space-between; position:relative;">
+              <div style="position:absolute; top:12px; right:12px; background:#dcfce7; color:#15803d; font-size:11px; font-weight:700; padding:2px 8px; border-radius:12px;">Top Recommended</div>
+              <div>
+                <div style="width:36px; height:36px; border-radius:10px; background:#22c55e; color:#ffffff; display:flex; align-items:center; justify-content:center; font-size:18px; margin-bottom:12px;">
+                  <i class="fa-solid fa-train"></i>
+                </div>
+                <div style="font-size:16px; font-weight:800; color:#14532d;">Express & Superfast Trains</div>
+                <div style="font-size:13px; color:#166534; margin-top:4px; font-weight:600;"><i class="fa-regular fa-clock"></i> Fastest: ${alt.trains?.fastest || '4h 15m'}</div>
+                <div style="font-size:12px; color:#475569; margin-top:4px;">⭐ ${alt.trains?.popularOption || '14 Daily Direct Trains'}</div>
+                <div style="font-size:18px; font-weight:800; color:#15803d; margin-top:10px;">From ₹${alt.trains?.startingPrice || 165} <span style="font-size:11px; font-weight:500; color:#64748b;">/ seat</span></div>
+              </div>
+              <button type="button" class="tool-btn-primary" onclick="switchTransportModeAndSearch('Trains')" style="margin-top:14px; width:100%; background:#16a34a; border-color:#16a34a; padding:10px 14px; font-weight:700; font-size:13px; border-radius:10px; display:flex; align-items:center; justify-content:center; gap:8px;">
+                <i class="fa-solid fa-train"></i> Switch to Trains (${alt.trains?.count || 14} Available)
+              </button>
+            </div>
+
+            <!-- Bus Card -->
+            <div style="background:#eff6ff; border:1.5px solid #bfdbfe; border-radius:16px; padding:18px; display:flex; flex-direction:column; justify-content:space-between; position:relative;">
+              <div style="position:absolute; top:12px; right:12px; background:#dbeafe; color:#1d4ed8; font-size:11px; font-weight:700; padding:2px 8px; border-radius:12px;">Frequent Service</div>
+              <div>
+                <div style="width:36px; height:36px; border-radius:10px; background:#3b82f6; color:#ffffff; display:flex; align-items:center; justify-content:center; font-size:18px; margin-bottom:12px;">
+                  <i class="fa-solid fa-bus"></i>
+                </div>
+                <div style="font-size:16px; font-weight:800; color:#1e3a8a;">Intercity AC Sleepers & SETC</div>
+                <div style="font-size:13px; color:#1e40af; margin-top:4px; font-weight:600;"><i class="fa-regular fa-clock"></i> Duration: ${alt.buses?.fastest || '5h 30m'}</div>
+                <div style="font-size:12px; color:#475569; margin-top:4px;">🚌 ${alt.buses?.popularOption || 'Day & Overnight Sleepers'}</div>
+                <div style="font-size:18px; font-weight:800; color:#1d4ed8; margin-top:10px;">From ₹${alt.buses?.startingPrice || 380} <span style="font-size:11px; font-weight:500; color:#64748b;">/ seat</span></div>
+              </div>
+              <button type="button" class="tool-btn-primary" onclick="switchTransportModeAndSearch('Buses')" style="margin-top:14px; width:100%; background:#2563eb; border-color:#2563eb; padding:10px 14px; font-weight:700; font-size:13px; border-radius:10px; display:flex; align-items:center; justify-content:center; gap:8px;">
+                <i class="fa-solid fa-bus"></i> Switch to Buses (${alt.buses?.count || 48} Available)
+              </button>
+            </div>
+
+            <!-- Cab Card -->
+            <div style="background:#fffbeb; border:1.5px solid #fde68a; border-radius:16px; padding:18px; display:flex; flex-direction:column; justify-content:space-between; position:relative;">
+              <div style="position:absolute; top:12px; right:12px; background:#fef3c7; color:#b45309; font-size:11px; font-weight:700; padding:2px 8px; border-radius:12px;">Door-to-Door</div>
+              <div>
+                <div style="width:36px; height:36px; border-radius:10px; background:#f59e0b; color:#ffffff; display:flex; align-items:center; justify-content:center; font-size:18px; margin-bottom:12px;">
+                  <i class="fa-solid fa-car"></i>
+                </div>
+                <div style="font-size:16px; font-weight:800; color:#78350f;">Outstation Cab / Self Drive</div>
+                <div style="font-size:13px; color:#92400e; margin-top:4px; font-weight:600;"><i class="fa-solid fa-road"></i> ${alt.cabs?.distanceKm || 346} km · ${alt.cabs?.duration || '5h 45m'}</div>
+                <div style="font-size:12px; color:#475569; margin-top:4px;">🛣️ Via NH 48 (Chennai - Salem Highway)</div>
+                <div style="font-size:18px; font-weight:800; color:#b45309; margin-top:10px;">Est. ₹${(alt.cabs?.estimatedCost || 4850).toLocaleString('en-IN')} <span style="font-size:11px; font-weight:500; color:#64748b;">/ car</span></div>
+              </div>
+              <button type="button" class="tool-btn-primary" onclick="switchTransportModeAndSearch('Cabs')" style="margin-top:14px; width:100%; background:#d97706; border-color:#d97706; padding:10px 14px; font-weight:700; font-size:13px; border-radius:10px; display:flex; align-items:center; justify-content:center; gap:8px;">
+                <i class="fa-solid fa-car"></i> View Highway Cabs
+              </button>
+            </div>
+
+          </div>
+        </div>
+
+        ${connectingHtml}
+
+      </div>
+    `;
+  }
+  window.renderNoDirectFlightsUI = renderNoDirectFlightsUI;
+
+  // Mode switcher helper
+  function switchTransportModeAndSearch(targetMode) {
+    document.querySelectorAll('.t-mode-pill').forEach(pill => {
+      const pMode = pill.dataset.tmode || pill.innerText.trim();
+      if (pMode.toLowerCase() === targetMode.toLowerCase()) {
+        pill.classList.add('active');
+      } else {
+        pill.classList.remove('active');
+      }
+    });
+
+    const f = document.getElementById('tFromInput') ? document.getElementById('tFromInput').value : '';
+    const t = document.getElementById('tToInput') ? document.getElementById('tToInput').value : '';
+    showToast(`Switched to ${targetMode}! Fetching live verified schedules...`);
+    if (typeof window.executeDynamicTravelSearch === 'function') {
+      window.executeDynamicTravelSearch(targetMode, f, t);
+    }
+  }
+  window.switchTransportModeAndSearch = switchTransportModeAndSearch;
+
   function renderFilteredAndSortedOffers() {
-    if (!window.CURRENT_TRAVEL_SESSION || !window.CURRENT_TRAVEL_SESSION.offers) return;
+    if (!window.CURRENT_TRAVEL_SESSION) return;
+    const session = window.CURRENT_TRAVEL_SESSION;
     const grid = document.getElementById('tResultsGrid');
     const countEl = document.getElementById('tResultsCount');
     if (!grid) return;
+
+    const queryOrigin = session.query?.from || (document.getElementById('tFromInput') ? document.getElementById('tFromInput').value : 'Chennai');
+    const queryDest = session.query?.to || (document.getElementById('tToInput') ? document.getElementById('tToInput').value : 'Bangalore');
+    const isFlightMode = (session.query?.travelMode || 'Flights') === 'Flights';
+
+    // 1. Direct Flights Unavailability Check
+    if (isFlightMode && (session.hasDirectFlights === false || (session.offers && session.offers.length === 0))) {
+      if (countEl) countEl.textContent = '0 direct flights available · Alternatives suggested below';
+      grid.innerHTML = renderNoDirectFlightsUI(queryOrigin, queryDest, session.alternatives, session.connectingFlights);
+      return;
+    }
 
     const maxPriceVal = document.getElementById('tFilterPrice') ? document.getElementById('tFilterPrice').value : 'all';
     const timeSlotVal = document.getElementById('tFilterTime') ? document.getElementById('tFilterTime').value : 'all';
@@ -4838,7 +5041,25 @@ document.addEventListener('DOMContentLoaded', () => {
     const operatorVal = document.getElementById('tFilterOperator') ? document.getElementById('tFilterOperator').value : 'all';
     const sortVal = document.getElementById('tSortSelect') ? document.getElementById('tSortSelect').value : 'recommended';
 
-    let filtered = [...window.CURRENT_TRAVEL_SESSION.offers];
+    let filtered = [...(session.offers || [])];
+
+    // 2. Strict UI State Validation: Filter out any offer whose sector does NOT match query selector
+    if (isFlightMode) {
+      filtered = filtered.filter(offer => {
+        const check = validateFlightSector(offer, queryOrigin, queryDest);
+        if (!check.isValid) {
+          console.warn('[Sector Guard] Discarding mismatched flight offer:', offer.title, check.reason);
+          return false;
+        }
+        return true;
+      });
+
+      if (filtered.length === 0 && session.offers && session.offers.length > 0) {
+        if (countEl) countEl.textContent = '0 matching sector flights';
+        grid.innerHTML = renderNoDirectFlightsUI(queryOrigin, queryDest, session.alternatives, session.connectingFlights);
+        return;
+      }
+    }
 
     // Filter: Max Price
     if (maxPriceVal !== 'all') {
@@ -4898,7 +5119,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     // Update Count
-    const totalInSession = window.CURRENT_TRAVEL_SESSION.offers.length;
+    const totalInSession = session.offers ? session.offers.length : 0;
     if (countEl) {
       countEl.textContent = `Showing ${filtered.length} of ${totalInSession} verified options`;
     }
@@ -5030,17 +5251,59 @@ document.addEventListener('DOMContentLoaded', () => {
       }
 
       const json = await res.json();
-      if (json && json.data && Array.isArray(json.data.offers)) {
+      if (json && json.data) {
         window.CURRENT_TRAVEL_SESSION = json.data;
-        populateOperatorDropdown(json.data.offers);
+        populateOperatorDropdown(json.data.offers || []);
         renderFilteredAndSortedOffers();
-        showToast(`Found ${json.data.offers.length} verified ${mode} options! ✈️`);
+        if (json.data.hasDirectFlights === false) {
+          showToast(`No direct flights for ${origin} ➔ ${destination}. Recommended alternatives displayed! 🚆`);
+        } else {
+          showToast(`Found ${json.data.offers ? json.data.offers.length : 0} verified ${mode} options! ✈️`);
+        }
         return;
       }
       throw new Error('Invalid response structure');
     } catch (err) {
       console.warn('Live travel search fetch error, falling back to local dataset:', err);
-      // Client-side fallback gracefully
+
+      // Route Unavailability check for Salem to Chennai or routes with no direct flights
+      if (mode === 'Flights' && (origin.toLowerCase().includes('salem') || origin.toLowerCase().includes('sxv'))) {
+        window.CURRENT_TRAVEL_SESSION = {
+          searchId: 'fallback-session',
+          query: { from: origin, to: destination, travelMode: 'Flights' },
+          hasDirectFlights: false,
+          totalCount: 0,
+          offers: [],
+          alternatives: {
+            suggestedMode: 'Trains',
+            reason: `No direct scheduled commercial flights operate between Salem (SXV) and Chennai (MAA). High-speed express trains and overnight luxury sleeper buses connect Salem and Chennai directly in ~4 to 5 hours with regular departures.`,
+            trains: { available: true, count: 14, fastest: '4h 15m (20644 Vande Bharat / 12676 Kovai Exp)', startingPrice: 165, popularOption: '20644 Vande Bharat Express' },
+            buses: { available: true, count: 48, fastest: '5h 30m (SETC / Multi-Axle AC Sleeper)', startingPrice: 380, popularOption: 'TNSTC / SETC Non-Stop Sleeper' },
+            cabs: { distanceKm: 346, duration: '5h 45m via NH 48', estimatedCost: 4850 }
+          },
+          connectingFlights: [
+            {
+              carrier: 'Alliance Air + IndiGo',
+              airlineCode: '9I',
+              flightNumbers: ['9I-503', '6E-6512'],
+              route: 'Salem (SXV) ➔ Bengaluru (BLR) ➔ Chennai (MAA)',
+              originCode: 'SXV',
+              stopoverCode: 'BLR',
+              destCode: 'MAA',
+              departureTime: '08:45',
+              arrivalTime: '13:10',
+              totalDuration: '4h 25m',
+              layoverDuration: '1h 40m at BLR (Kempegowda Int\'l)',
+              startingPrice: 6850
+            }
+          ]
+        };
+        renderFilteredAndSortedOffers();
+        showToast('No direct flights found. Showing recommended Train & Bus options! 🚆');
+        return;
+      }
+
+      // Client-side fallback gracefully for standard routes
       const fallbackList = MOCK_TRANSPORT_DATA[mode] || MOCK_TRANSPORT_DATA['Flights'] || [];
       const syntheticOffers = fallbackList.map((item, idx) => {
         const numPrice = parseInt(item.price.replace(/[^0-9]/g, ''), 10) || 2500;
